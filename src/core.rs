@@ -51,15 +51,23 @@ impl Clause {
     }
 
     /// Return an iterator over all the literals present in the clause.
-    fn literals(&self) -> impl Iterator<Item = &Literal> {
+    pub fn literals(&self) -> impl Iterator<Item = &Literal> {
         self.0.iter()
     }
 
+    /// Check if the clause is the empty clause.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Given an assignment of literals, give an evaluation of the clause.
+    /// Check if the clause contains the specified literal. This does not return
+    /// true if it contains the negated literal.
+    pub fn has_literal(&self, literal: Literal) -> bool {
+        self.0.contains(&literal)
+    }
+
+    /// Given an assignment of literals, give an evaluation of the clause. If a
+    /// unit is encountered, return the unknown literal.
     pub fn eval(&self, assignment: &Assignment) -> Evaluation {
         if assignment.0.is_disjoint(&self.0) {
             let negation = assignment.inverse();
@@ -76,6 +84,26 @@ impl Clause {
         } else {
             Evaluation::True
         }
+    }
+
+    // Returns true if only a single literal is true or unknown in the clause.
+    pub fn is_unit(&self, assignment: &Assignment) -> bool {
+        self.literals()
+            .filter(|lit| !assignment.0.contains(&!**lit))
+            .count()
+            == 1
+    }
+
+    /// Create a new clause which is the resolvent of self and other on the
+    /// provided literal. This does not check if self contains the literal and
+    /// other contains the negated literal.
+    pub fn resolve(&self, other: &Clause, literal: Literal) -> Self {
+        let mut left = self.0.clone();
+        let mut right = other.0.clone();
+        left.remove(&literal);
+        right.remove(&!literal);
+        left.extend(right.into_iter());
+        Clause(left)
     }
 }
 
@@ -96,6 +124,12 @@ impl Display for Clause {
 pub struct Assignment(BTreeSet<Literal>);
 
 impl Assignment {
+    /// Create a new empty assignment.
+    pub fn new() -> Self {
+        Assignment(BTreeSet::new())
+    }
+
+    /// Add a literal to the assignment.
     pub fn add_literal(&mut self, lit: Literal) {
         self.0.insert(lit);
     }
@@ -147,8 +181,8 @@ impl ClauseStorage {
     }
 
     /// Removes the clause which is equal to the one provided.
-    pub fn del_clause(&mut self, clause: &Clause) {
-        self.0.remove(clause);
+    pub fn del_clause(&mut self, clause: &Clause) -> bool {
+        self.0.remove(clause)
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = &Clause> {

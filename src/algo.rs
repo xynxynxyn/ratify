@@ -1,11 +1,30 @@
 use std::fmt::Display;
 
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 
-use crate::core::{Assignment, Clause, ClauseStorage, Evaluation, Lemma};
+use crate::core::{Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal};
+
+/// Apply unit propagation and update the assignment correspondingly.
+fn propagate(clause_db: &ClauseStorage, assignment: &mut Assignment) {
+    debug!("applying unit propagation");
+    trace!("before ({})", assignment);
+
+    let mut modified = true;
+    while modified {
+        modified = false;
+        for clause in clause_db.clauses() {
+            if let Evaluation::Unit(lit) = clause.eval(&assignment) {
+                assignment.add_literal(lit);
+                modified = true;
+            }
+        }
+    }
+
+    trace!("after  ({})", assignment);
+}
 
 /// The end result of checking a proof against a formula.
-pub enum Validity {
+pub enum Verdict {
     /// The refutation has successfully been validated.
     RefutationVerified,
     /// The refutation could not be validated as the clauses are not redundant.
@@ -15,10 +34,10 @@ pub enum Validity {
     NoConflict,
 }
 
-impl Display for Validity {
+impl Display for Verdict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Validity::RefutationVerified => write!(f, "s VERIFIED"),
+            Verdict::RefutationVerified => write!(f, "s VERIFIED"),
             _ => write!(f, "s NOT VERIFIED"),
         }
     }
@@ -31,20 +50,22 @@ impl Display for Validity {
 /// 3. If a single clause is false, RUP is verified.
 /// 4. If a unit is encountered
 fn check_rup(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
+    trace!("checking RUP property for lemma ({})", lemma);
     // create a new assignment from the lemma
     let mut assignment = Assignment::from(lemma);
     // track whether the assignment has been modified
     let mut modified = false;
     loop {
-        // check each clause in the database
         for c in clause_db.clauses() {
-            debug!("checking clause {} against assignment {}", c, assignment);
             match c.eval(&assignment) {
                 // if any clause evals to false then RUP is verified
-                Evaluation::False => return true,
+                Evaluation::False => {
+                    trace!("clause ({}) evaluates to false", c);
+                    return true;
+                }
                 // if a unit is found, extend the assignment
                 Evaluation::Unit(lit) => {
-                    debug!("adding unit {}", lit);
+                    trace!("adding unit ({}) from clause ({})", lit, c);
                     assignment.add_literal(lit);
                     modified = true;
                 }
@@ -57,26 +78,76 @@ fn check_rup(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
         } else {
             // if no units were found and no false clauses exist, RUP is not
             // validated
+            trace!(
+                "RUP verification failed with final assignment ({})",
+                assignment
+            );
             return false;
         }
     }
 }
 
+fn check_rat_on(clause_db: &ClauseStorage, lemma: &Clause, lit: Literal) -> bool {
+    trace!(
+        "checking RAT property for lemma ({}) on literal ({})",
+        lemma,
+        lit
+    );
+    // find all clauses in the database which contain the
+    // negation of the literal.
+    for clause in clause_db.clauses().filter(|c| c.has_literal(!lit)) {
+        // create the resolvent
+        let resolvent = lemma.resolve(clause, lit);
+        // check for rup property
+        if !check_rup(clause_db, &resolvent) {
+            trace!("RAT verification on ({}) failed", lit);
+            return false;
+        }
+    }
+    // if all of the resolvents are RUP the lemma is RAT
+    true
+}
+/// Check if a lemma has the RAT property with respect to the provided clause
+/// database.
+fn check_rat(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
+    trace!("checking RAT property for lemma '{}'", lemma);
+    // check RAT property for each pivot literal
+    for lit in lemma.literals() {
+        if check_rat_on(clause_db, lemma, *lit) {
+            return true;
+        }
+    }
+
+    trace!("RAT verification failed");
+    false
+}
+
 /// Sequentially validate each lemma by checking if it has the RUP property.
 /// Clauses are added and removed from the clause database during this process.
-pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Validity {
+pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Verdict {
     info!("forward validating rup only");
     let mut empty_clause = false;
+    let mut assignment = Assignment::new();
+    propagate(clause_db, &mut assignment);
 
     for lemma in lemmas {
         // verify each lemma in order
         match lemma {
             Lemma::Deletion(c) => {
-                debug!("deleting clause '{}'", c);
-                clause_db.del_clause(c)
+                // TODO find out how to properly identify unit clauses and
+                // ignore their deletion
+                if c.is_unit(&assignment) {
+                    debug!("skipping unit clause deletion for ({})", c);
+                } else {
+                    if !clause_db.del_clause(c) {
+                        debug!("clause did not exist");
+                    } else {
+                        debug!("deleted clause ({})", c);
+                    }
+                }
             }
             Lemma::Addition(c) => {
-                debug!("checking lemma '{}'", c);
+                debug!("checking lemma ({})", c);
                 // check if we encountered the empty clause
                 if c.is_empty() {
                     empty_clause = true;
@@ -86,13 +157,17 @@ pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Vali
                 // whether it is RUP, and if that doesn't work check if it is
                 // RAT
                 if check_rup(clause_db, c) {
-                    debug!("lemma is rup, extending clause database");
+                    debug!("lemma is RUP, extending clause database");
+                    clause_db.add_clause(c.clone());
+                } else if check_rat(clause_db, c) {
+                    debug!("lemma is RAT, extending clause database");
                     clause_db.add_clause(c.clone());
                 } else {
-                    // TODO check for RAT property as fallback
-                    debug!("lemma is NOT rup, proof not valid");
-                    return Validity::RefutationRefuted;
+                    debug!("lemma is neither RUP nor RAT, refuting proof");
+                    return Verdict::RefutationRefuted;
                 }
+
+                propagate(clause_db, &mut assignment);
             }
         }
     }
@@ -102,8 +177,9 @@ pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Vali
     // verify
     if !empty_clause && !check_rup(clause_db, &Clause::empty()) {
         error!("no conflict detected");
-        Validity::NoConflict
+        Verdict::NoConflict
     } else {
-        Validity::RefutationVerified
+        info!("refutation verified");
+        Verdict::RefutationVerified
     }
 }

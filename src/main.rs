@@ -9,7 +9,7 @@ mod core;
 mod parser;
 
 use crate::{
-    algo::{forward_validate, Validity},
+    algo::{forward_validate, Verdict},
     core::ClauseStorage,
 };
 use anyhow::{bail, Result};
@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     }
 
     // parse the input files
-    let clauses = parser::dimacs::parse(&std::fs::read_to_string(&args[1])?)?;
+    let clauses = parser::cnf::parse(&std::fs::read_to_string(&args[1])?)?;
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&args[2])?)?;
 
     // create the clause storage
@@ -34,8 +34,8 @@ fn main() -> Result<()> {
     let res = forward_validate(&mut clause_db, &lemmas);
     println!("{}", res);
     match res {
-        Validity::RefutationVerified => Ok(()),
-        Validity::RefutationRefuted => bail!("refutation not verified"),
-        Validity::NoConflict => bail!("no conflict detected"),
+        Verdict::RefutationVerified => Ok(()),
+        Verdict::RefutationRefuted => bail!("refutation not verified"),
+        Verdict::NoConflict => bail!("no conflict detected"),
     }
 }
