@@ -1,5 +1,3 @@
-/// Implementation of the algorithms.
-mod algo;
 /// The core module contains the core data structures, such as Formula, Clause
 /// and Literals. It also includes the interfaces with which the data is
 /// accessed.
@@ -7,10 +5,12 @@ mod core;
 /// The parser module contains anything related to parsing. Mainly DIMACS and
 /// DRAT in both text and binary form.
 mod parser;
+/// Implementation of the validation algorithms.
+mod validator;
 
 use crate::{
-    algo::{forward_validate, Verdict},
     core::{ClauseStorage, Lemma},
+    validator::{forward_validate, Verdict},
 };
 use anyhow::{bail, Result};
 use log::info;
