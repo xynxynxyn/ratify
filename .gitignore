@@ -1,2 +1,6 @@
 /target
 *.drat
+perf.data
+perf.data.old
+*.svg
+gratgen
