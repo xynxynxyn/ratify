@@ -10,9 +10,10 @@ mod parser;
 
 use crate::{
     algo::{forward_validate, Verdict},
-    core::ClauseStorage,
+    core::{ClauseStorage, Lemma},
 };
 use anyhow::{bail, Result};
+use log::info;
 use std::env;
 
 fn main() -> Result<()> {
@@ -24,11 +25,22 @@ fn main() -> Result<()> {
     }
 
     // parse the input files
-    let clauses = parser::cnf::parse(&std::fs::read_to_string(&args[1])?)?;
+    let (header, clauses) = parser::cnf::parse(&std::fs::read_to_string(&args[1])?)?;
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&args[2])?)?;
 
     // create the clause storage
-    let mut clause_db = ClauseStorage::from_iter(clauses.into_iter());
+    let mut clause_db = ClauseStorage::with_capacity(header.clauses);
+    info!("populating clause storage");
+    // add all the clauses from the CNF file
+    clause_db.add_from_iter(clauses.into_iter(), true);
+    // add all the clauses added from the proof
+    clause_db.add_from_iter(
+        lemmas.iter().cloned().filter_map(|lemma| match lemma {
+            Lemma::Addition(clause) => Some(clause),
+            _ => None,
+        }),
+        false,
+    );
 
     // validate the proof against the clauses
     let res = forward_validate(&mut clause_db, &lemmas);

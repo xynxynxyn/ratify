@@ -1,5 +1,10 @@
 use itertools::Itertools;
-use std::{collections::BTreeSet, fmt::Display, ops::Not};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    fmt::Display,
+    hash::Hash,
+    ops::Not,
+};
 
 /// The smallest data type representing a single variable.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -17,6 +22,13 @@ impl From<i32> for Literal {
 
 impl Not for Literal {
     type Output = Self;
+    fn not(self) -> Self::Output {
+        Literal(-self.0)
+    }
+}
+
+impl Not for &Literal {
+    type Output = Literal;
     fn not(self) -> Self::Output {
         Literal(-self.0)
     }
@@ -69,20 +81,29 @@ impl Clause {
     /// Given an assignment of literals, give an evaluation of the clause. If a
     /// unit is encountered, return the unknown literal.
     pub fn eval(&self, assignment: &Assignment) -> Evaluation {
-        if assignment.0.is_disjoint(&self.0) {
-            let negation = assignment.inverse();
-            if negation.0.is_superset(&self.0) {
-                Evaluation::False
-            } else {
-                let unassigned = self.0.difference(&negation.0).collect_vec();
-                if unassigned.len() == 1 {
-                    Evaluation::Unit(*unassigned[0])
-                } else {
-                    Evaluation::Unknown
-                }
+        if self.0.is_empty() {
+            return Evaluation::False;
+        }
+
+        let mut assigned = 0;
+        let mut last_unknown = self.0.first().expect("clause cannot be empty");
+        for lit in &self.0 {
+            if assignment.0.contains(lit) {
+                return Evaluation::True;
             }
+            if assignment.0.contains(&!lit) {
+                assigned += 1;
+            } else {
+                last_unknown = lit;
+            }
+        }
+
+        if assigned == self.0.len() {
+            Evaluation::False
+        } else if assigned == self.0.len() - 1 {
+            Evaluation::Unit(*last_unknown)
         } else {
-            Evaluation::True
+            Evaluation::Unknown
         }
     }
 
@@ -120,23 +141,18 @@ impl Display for Clause {
 
 /// A collection of literals which should all be true. Mainly used to evaluate a
 /// clause.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
-pub struct Assignment(BTreeSet<Literal>);
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Assignment(HashSet<Literal>);
 
 impl Assignment {
     /// Create a new empty assignment.
     pub fn new() -> Self {
-        Assignment(BTreeSet::new())
+        Assignment(HashSet::new())
     }
 
     /// Add a literal to the assignment.
     pub fn add_literal(&mut self, lit: Literal) {
         self.0.insert(lit);
-    }
-
-    /// Negate every literal in the assignment.
-    fn inverse(&self) -> Self {
-        Assignment(self.0.iter().map(|&lit| !lit).collect())
     }
 }
 
@@ -159,6 +175,7 @@ impl Display for Assignment {
     }
 }
 
+#[derive(Clone)]
 pub enum Lemma {
     Addition(Clause),
     Deletion(Clause),
@@ -167,25 +184,38 @@ pub enum Lemma {
 /// The purpose of this data structure is to efficiently store clauses, which
 /// are a collection of literals. A variety of methods to easily and quickly
 /// find relevant clauses should be provided.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
-pub struct ClauseStorage(BTreeSet<Clause>);
+#[derive(Debug)]
+pub struct ClauseStorage {
+    clauses: HashMap<Clause, bool>,
+}
 
 impl ClauseStorage {
-    /// Add the given clause to the storage.
-    pub fn add_clause(&mut self, clause: Clause) {
-        self.0.insert(clause);
+    /// Create a new clause storage with a certain capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        ClauseStorage {
+            clauses: HashMap::with_capacity(capacity),
+        }
     }
 
-    pub fn from_iter(clauses: impl Iterator<Item = Clause>) -> Self {
-        ClauseStorage(BTreeSet::from_iter(clauses))
+    /// Add all clauses from the given iterator and set them to be active or
+    /// inactive.
+    pub fn add_from_iter(&mut self, clauses: impl Iterator<Item = Clause>, active: bool) {
+        self.clauses.extend(clauses.map(|c| (c, active)));
     }
 
-    /// Removes the clause which is equal to the one provided.
-    pub fn del_clause(&mut self, clause: &Clause) -> bool {
-        self.0.remove(clause)
+    /// Activate the provided clause in the storage.
+    pub fn activate_clause(&mut self, clause: &Clause) {
+        self.clauses.get_mut(clause).map(|b| *b = true);
+    }
+
+    /// Deactivates the provided clause.
+    pub fn del_clause(&mut self, clause: &Clause) {
+        self.clauses.get_mut(clause).map(|_| false);
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = &Clause> {
-        self.0.iter()
+        self.clauses
+            .iter()
+            .filter_map(|(c, a)| if *a { Some(c) } else { None })
     }
 }

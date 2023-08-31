@@ -4,6 +4,74 @@ use log::{debug, error, info, trace};
 
 use crate::core::{Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal};
 
+/// Sequentially validate each lemma by checking if it has the RUP property.
+/// Clauses are added and removed from the clause database during this process.
+pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Verdict {
+    info!("forward validating rup only");
+    let mut empty_clause = false;
+    let mut assignment = Assignment::new();
+    propagate(clause_db, &mut assignment);
+
+    let mut processed = 0;
+    let log_cutoff = 100;
+    let max_lemmas = lemmas.len();
+
+    for lemma in lemmas {
+        // verify each lemma in order
+        match lemma {
+            Lemma::Deletion(c) => {
+                // TODO find out how to properly identify unit clauses and
+                // ignore their deletion
+                if c.is_unit(&assignment) {
+                    debug!("skipping unit clause deletion for ({})", c);
+                } else {
+                    clause_db.del_clause(c);
+                    debug!("deleted clause ({})", c);
+                }
+            }
+            Lemma::Addition(c) => {
+                debug!("checking lemma ({})", c);
+                // check if we encountered the empty clause
+                if c.is_empty() {
+                    empty_clause = true;
+                }
+
+                // check if the lemma being added is redundant by first checking
+                // whether it is RUP, and if that doesn't work check if it is
+                // RAT
+                if check_rup(clause_db, c) {
+                    debug!("lemma is RUP, extending clause database");
+                    clause_db.activate_clause(c);
+                } else if check_rat(clause_db, c) {
+                    debug!("lemma is RAT, extending clause database");
+                    clause_db.activate_clause(c);
+                } else {
+                    debug!("lemma is neither RUP nor RAT, refuting proof");
+                    return Verdict::RefutationRefuted;
+                }
+
+                propagate(clause_db, &mut assignment);
+            }
+        }
+
+        processed += 1;
+        if processed % log_cutoff == 0 {
+            info!("processed {} out of {} lemmas", processed, max_lemmas);
+        }
+    }
+
+    // if we have not seen the empty clause yet and it is not RUP, then the
+    // proof does not show a conflict and therefore there is no refutation to
+    // verify
+    if !empty_clause && !check_rup(clause_db, &Clause::empty()) {
+        error!("no conflict detected");
+        Verdict::NoConflict
+    } else {
+        info!("refutation verified");
+        Verdict::RefutationVerified
+    }
+}
+
 /// Apply unit propagation and update the assignment correspondingly.
 fn propagate(clause_db: &ClauseStorage, assignment: &mut Assignment) {
     debug!("applying unit propagation");
@@ -13,7 +81,9 @@ fn propagate(clause_db: &ClauseStorage, assignment: &mut Assignment) {
     while modified {
         modified = false;
         for clause in clause_db.clauses() {
+            trace!("clause {}", clause);
             if let Evaluation::Unit(lit) = clause.eval(&assignment) {
+                trace!("  unit");
                 assignment.add_literal(lit);
                 modified = true;
             }
@@ -120,66 +190,4 @@ fn check_rat(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
 
     trace!("RAT verification failed");
     false
-}
-
-/// Sequentially validate each lemma by checking if it has the RUP property.
-/// Clauses are added and removed from the clause database during this process.
-pub fn forward_validate(clause_db: &mut ClauseStorage, lemmas: &[Lemma]) -> Verdict {
-    info!("forward validating rup only");
-    let mut empty_clause = false;
-    let mut assignment = Assignment::new();
-    propagate(clause_db, &mut assignment);
-
-    for lemma in lemmas {
-        // verify each lemma in order
-        match lemma {
-            Lemma::Deletion(c) => {
-                // TODO find out how to properly identify unit clauses and
-                // ignore their deletion
-                if c.is_unit(&assignment) {
-                    debug!("skipping unit clause deletion for ({})", c);
-                } else {
-                    if !clause_db.del_clause(c) {
-                        debug!("clause did not exist");
-                    } else {
-                        debug!("deleted clause ({})", c);
-                    }
-                }
-            }
-            Lemma::Addition(c) => {
-                debug!("checking lemma ({})", c);
-                // check if we encountered the empty clause
-                if c.is_empty() {
-                    empty_clause = true;
-                }
-
-                // check if the lemma being added is redundant by first checking
-                // whether it is RUP, and if that doesn't work check if it is
-                // RAT
-                if check_rup(clause_db, c) {
-                    debug!("lemma is RUP, extending clause database");
-                    clause_db.add_clause(c.clone());
-                } else if check_rat(clause_db, c) {
-                    debug!("lemma is RAT, extending clause database");
-                    clause_db.add_clause(c.clone());
-                } else {
-                    debug!("lemma is neither RUP nor RAT, refuting proof");
-                    return Verdict::RefutationRefuted;
-                }
-
-                propagate(clause_db, &mut assignment);
-            }
-        }
-    }
-
-    // if we have not seen the empty clause yet and it is not RUP, then the
-    // proof does not show a conflict and therefore there is no refutation to
-    // verify
-    if !empty_clause && !check_rup(clause_db, &Clause::empty()) {
-        error!("no conflict detected");
-        Verdict::NoConflict
-    } else {
-        info!("refutation verified");
-        Verdict::RefutationVerified
-    }
 }

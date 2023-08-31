@@ -9,9 +9,9 @@ use nom::{
     IResult, Parser,
 };
 
-struct Header {
-    vars: i32,
-    clauses: i32,
+pub struct Header {
+    pub vars: usize,
+    pub clauses: usize,
 }
 
 fn parse_header(input: &str) -> IResult<&str, Header> {
@@ -20,16 +20,24 @@ fn parse_header(input: &str) -> IResult<&str, Header> {
         tuple((multispace0, tag("p"), multispace1, tag("cnf"), multispace1)).parse(input)?;
     info!("input: {}", input);
     let (input, (vars, _, clauses)) = tuple((parse_i32, multispace1, parse_i32)).parse(input)?;
-    Ok((input, Header { vars, clauses }))
+    Ok((
+        input,
+        Header {
+            vars: vars as usize,
+            clauses: clauses as usize,
+        },
+    ))
 }
 
-pub fn parse(input: &str) -> Result<Vec<Clause>> {
+pub fn parse(input: &str) -> Result<(Header, Vec<Clause>)> {
     info!("parsing cnf");
     let mut lines = input.lines().filter(|s| !s.starts_with('c'));
-    if let Some(line) = lines.next() {
-        let (_, header) = parse_header(line).map_err(|_| anyhow!("invalid dimacs header"))?;
+    let header = {
+        let (_, header) = parse_header(lines.next().ok_or(anyhow!("empty input"))?)
+            .map_err(|_| anyhow!("invalid dimacs header"))?;
         info!("{} variables and {} clauses", header.vars, header.clauses);
-    }
+        header
+    };
 
     let clauses = lines
         .into_iter()
@@ -39,5 +47,5 @@ pub fn parse(input: &str) -> Result<Vec<Clause>> {
                 .map_err(|_| anyhow!("invalid clause '{}'", line))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(clauses)
+    Ok((header, clauses))
 }
