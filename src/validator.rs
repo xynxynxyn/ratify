@@ -1,61 +1,63 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-};
+mod watcher;
+use watcher::Watcher;
 
+use std::fmt::Display;
+
+use itertools::Itertools;
 use log::{debug, error, info, trace};
 
-use crate::core::{Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal};
+use crate::core::{
+    Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal, MaybeConflict, RefLemma,
+};
 
 /// Validator struct that tracks the state of the validation process.
-struct Validator<'a> {
+struct Validator {
     /// Storage for all clauses
     clause_db: ClauseStorage,
-    /// Watchlist for unit propagation
-    watchlist: HashMap<Literal, Vec<&'a Clause>>,
+    /// Watcher keeps track of watched literal responsibilities and
+    /// functioniality
+    watcher: Watcher,
     /// The current assignment
-    assignment: HashSet<Literal>,
+    assignment: Assignment,
 }
 
 pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>) -> Verdict {
-    let lemma_clauses = lemmas.iter().filter_map(|lemma| {
-        if let Lemma::Addition(c) = lemma {
-            Some(c.clone())
-        } else {
-            None
-        }
-    });
+    // determine the upper limit of clauses. this may be significantly larger
+    // than the actual number of clauses depending on the number of deletions.
+    let clause_count = clauses.len() + lemmas.len();
+    let mut clause_db = ClauseStorage::with_capacity(clause_count);
+    // convert the lemmas into reflemmas, the same as before but they contain a
+    // clause reference instead of a clause.
+    let lemmas = lemmas
+        .into_iter()
+        .map(|lemma| match lemma {
+            Lemma::Addition(c) => RefLemma::Addition(clause_db.add_clause(c, false)),
+            Lemma::Deletion(c) => RefLemma::Deletion(clause_db.add_clause(c, false)),
+        })
+        .collect_vec();
 
-    let lemma_clause_count = match lemma_clauses.size_hint() {
-        (_, Some(size)) => size,
-        (size, _) => size,
-    };
-    info!(
-        "constructing solver with {} active and {} passive clauses",
-        clauses.len(),
-        lemma_clause_count
-    );
-    let mut clause_db = ClauseStorage::with_capacity(clauses.len() + lemma_clause_count);
+    // add all the initial clauses, this may introduce duplicates. This is not
+    // an issue however as the duplicates from the lemma should be marked as
+    // inactive.
     clause_db.add_from_iter(clauses.into_iter(), true);
-    clause_db.add_from_iter(lemma_clauses, false);
+
+    let watcher = Watcher::init(&clause_db);
 
     let validator = Validator {
         clause_db,
-        watchlist: HashMap::new(),
-        assignment: HashSet::new(),
+        watcher,
+        assignment: Assignment::new(),
     };
 
     validator.forward_validate(&lemmas)
 }
 
-impl Validator<'_> {
+impl Validator {
     /// Sequentially validate each lemma by checking if it has the RUP property.
     /// Clauses are added and removed from the clause database during this process.
-    fn forward_validate(mut self, lemmas: &[Lemma]) -> Verdict {
+    fn forward_validate(mut self, lemmas: &[RefLemma]) -> Verdict {
         info!("forward validating rup only");
         let mut empty_clause = false;
-        let mut assignment = Assignment::new();
-        propagate(&self.clause_db, &mut assignment);
 
         let mut processed = 0;
         let log_cutoff = 100;
@@ -64,38 +66,54 @@ impl Validator<'_> {
         for lemma in lemmas {
             // verify each lemma in order
             match lemma {
-                Lemma::Deletion(c) => {
+                RefLemma::Deletion(c_ref) => {
                     // TODO find out how to properly identify unit clauses and
                     // ignore their deletion
-                    if c.is_unit(&assignment) {
-                        debug!("skipping unit clause deletion for ({})", c);
+                    if let Some(clause) = self.clause_db.get_clause(*c_ref) {
+                        if clause.is_unit(&self.assignment) {
+                            debug!("skipping unit clause deletion for ({})", clause);
+                        } else {
+                            debug!("deleted clause ({})", clause);
+                            self.clause_db.del_clause(*c_ref);
+                        }
                     } else {
-                        self.clause_db.del_clause(c);
-                        debug!("deleted clause ({})", c);
+                        debug!("clause did not exist {:?}", c_ref);
                     }
                 }
-                Lemma::Addition(c) => {
-                    debug!("checking lemma ({})", c);
+                RefLemma::Addition(c_ref) => {
+                    let clause = self.clause_db.get_any_clause(*c_ref);
+                    debug!("checking lemma ({})", clause);
                     // check if we encountered the empty clause
-                    if c.is_empty() {
+                    if clause.is_empty() {
                         empty_clause = true;
+                    }
+
+                    // check if it's a unit
+                    if let Some(unit) = clause.unit() {
+                        debug!("proof has a unit {}, adding to assignment", unit);
+                        // if it is, add it to the assignment
+                        if let MaybeConflict::Conflict = self.assignment.assign(unit) {
+                            // TODO this should be a verification then?
+                            return Verdict::RefutationVerified;
+                        }
                     }
 
                     // check if the lemma being added is redundant by first checking
                     // whether it is RUP, and if that doesn't work check if it is
                     // RAT
-                    if check_rup(&self.clause_db, c) {
+                    //if check_rup(&self.clause_db, clause) {
+                    if self.rup(clause) {
                         debug!("lemma is RUP, extending clause database");
-                        self.clause_db.activate_clause(c);
-                    } else if check_rat(&self.clause_db, c) {
+                        self.clause_db.activate_clause(*c_ref);
+                    } else if check_rat(&self.clause_db, clause) {
                         debug!("lemma is RAT, extending clause database");
-                        self.clause_db.activate_clause(c);
+                        self.clause_db.activate_clause(*c_ref);
                     } else {
                         debug!("lemma is neither RUP nor RAT, refuting proof");
                         return Verdict::RefutationRefuted;
                     }
 
-                    propagate(&self.clause_db, &mut assignment);
+                    propagate(&self.clause_db, &mut self.watcher, &mut self.assignment);
                 }
             }
 
@@ -116,27 +134,94 @@ impl Validator<'_> {
             Verdict::RefutationVerified
         }
     }
+
+    /// Check if the given clause has the rup property
+    fn rup(&self, lemma: &Clause) -> bool {
+        // construct a new assignment by adding all the negated literals from
+        // the lemma as units
+        let mut assignment = self.assignment.clone();
+        for lit in lemma.literals() {
+            if let MaybeConflict::Conflict = assignment.assign(!lit) {
+                return true;
+            }
+        }
+
+        // try to propagate the assignment
+        match propagate(&self.clause_db, &self.watcher, &mut assignment) {
+            MaybeConflict::Conflict => true,
+            MaybeConflict::NoConflict => false,
+        }
+    }
 }
 
-/// Apply unit propagation and update the assignment correspondingly.
-fn propagate(clause_db: &ClauseStorage, assignment: &mut Assignment) {
-    debug!("applying unit propagation");
-    trace!("before ({})", assignment);
+/// Apply unit propagation and update the given assignment correspondingly.
+fn propagate(
+    clause_db: &ClauseStorage,
+    watcher: &Watcher,
+    assignment: &mut Assignment,
+) -> MaybeConflict {
+    // non core unit propagation
+    debug!("applying unit propagation, before: {}", assignment);
+    // keep track of how many literals we processed
+    let mut processed = 0;
 
-    let mut modified = true;
-    while modified {
-        modified = false;
-        for clause in clause_db.clauses() {
-            trace!("clause {}", clause);
-            if let Evaluation::Unit(lit) = clause.eval(&assignment) {
-                trace!("  unit");
-                assignment.add_literal(lit);
-                modified = true;
+    loop {
+        if assignment.len() <= processed {
+            // if there are no more literals left and no conflict has been
+            // found return that there is no conflict
+            trace!("processed entire assignment, after: {}", assignment);
+            return MaybeConflict::NoConflict;
+        }
+
+        // Get the first unprocessed literal
+        let literal = assignment.get_literal(processed);
+        trace!("processing literal {}", literal);
+        processed += 1;
+
+        // go through all the clauses which watch the current literal
+        // we have to collect into a vec here because we mutate the watcher
+        // inside the loop.
+        for c_ref in watcher.watched_by(literal) {
+            // get both the literals that this clause is watching
+            if let Some((lit1, mut lit2)) = watcher.watches(c_ref) {
+                if lit1 == literal || lit2 == literal {
+                    // if the clause is satisfied, ignore and keep them on the
+                    // same watchlists.
+                    continue;
+                }
+
+                // swap around the literals to make sure that lit2 is the
+                // known literal.
+                if lit1.equal(&literal) {
+                    lit2 = lit1;
+                }
+
+                // one of the two literals must be the negation of the literal
+                // try to find the next unassigned literal to watch instead
+                // if none can be found this is a unit
+
+                // unwatch the literal we just checked
+                // this step also
+                if let Some(unit) = watcher.unwatch_and_watch(
+                    c_ref,
+                    // lit2 is the known literal here that we just checked
+                    lit2,
+                    &clause_db,
+                    &assignment,
+                ) {
+                    // found a unit
+                    debug!("found a unit {}, adding to assignment", unit);
+                    if let MaybeConflict::Conflict = assignment.assign(unit) {
+                        // if the assignment results in a conflict, make
+                        // sure to report that
+                        debug!("encountered conflict");
+                        debug!("after: {}", assignment);
+                        return MaybeConflict::Conflict;
+                    }
+                }
             }
         }
     }
-
-    trace!("after  ({})", assignment);
 }
 
 /// The end result of checking a proof against a formula.
@@ -172,17 +257,15 @@ fn check_rup(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
     // track whether the assignment has been modified
     let mut modified = false;
     loop {
-        for c in clause_db.clauses() {
-            match c.eval(&assignment) {
+        for (_, clause) in clause_db.clauses() {
+            match clause.eval(&assignment) {
                 // if any clause evals to false then RUP is verified
                 Evaluation::False => {
-                    trace!("clause ({}) evaluates to false", c);
                     return true;
                 }
                 // if a unit is found, extend the assignment
                 Evaluation::Unit(lit) => {
-                    trace!("adding unit ({}) from clause ({})", lit, c);
-                    assignment.add_literal(lit);
+                    assignment.assign(lit);
                     modified = true;
                 }
                 _ => (),
@@ -194,10 +277,6 @@ fn check_rup(clause_db: &ClauseStorage, lemma: &Clause) -> bool {
         } else {
             // if no units were found and no false clauses exist, RUP is not
             // validated
-            trace!(
-                "RUP verification failed with final assignment ({})",
-                assignment
-            );
             return false;
         }
     }
@@ -211,7 +290,7 @@ fn check_rat_on(clause_db: &ClauseStorage, lemma: &Clause, lit: Literal) -> bool
     );
     // find all clauses in the database which contain the
     // negation of the literal.
-    for clause in clause_db.clauses().filter(|c| c.has_literal(!lit)) {
+    for (_, clause) in clause_db.clauses().filter(|(_, c)| c.has_literal(!lit)) {
         // create the resolvent
         let resolvent = lemma.resolve(clause, lit);
         // check for rup property

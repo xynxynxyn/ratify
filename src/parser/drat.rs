@@ -27,7 +27,7 @@ fn parse_lemma(input: &str) -> IResult<&str, Lemma> {
 
 pub fn parse(input: &str) -> Result<Vec<Lemma>> {
     info!("parsing drat proof");
-    Ok(input
+    input
         .lines()
         .filter(|s| !s.starts_with('c'))
         .map(|line| {
@@ -35,5 +35,5 @@ pub fn parse(input: &str) -> Result<Vec<Lemma>> {
                 .map(|(_, lemma)| lemma)
                 .map_err(|_| anyhow!("invalid lemma"))
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }

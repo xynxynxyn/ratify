@@ -40,7 +40,6 @@ pub fn parse(input: &str) -> Result<(Header, Vec<Clause>)> {
     };
 
     let clauses = lines
-        .into_iter()
         .map(|line| {
             parse_clause(line)
                 .map(|(_, clause)| clause)

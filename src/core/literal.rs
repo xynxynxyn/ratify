@@ -1,8 +1,20 @@
-use std::{ops::Not, fmt::Display};
+use std::{fmt::Display, ops::Not};
 
 /// The smallest data type representing a single variable.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct Literal(i32);
+
+impl Literal {
+    pub fn abs(&self) -> Literal {
+        Literal(self.0.abs())
+    }
+
+    /// Check if self and other are the same symbol. Negation does not apply
+    /// here.
+    pub fn equal(&self, other: &Literal) -> bool {
+        self.abs() == other.abs()
+    }
+}
 
 impl From<i32> for Literal {
     fn from(id: i32) -> Self {

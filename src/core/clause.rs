@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, fmt::Display};
 
 use super::{Assignment, Literal};
 /// A clause consists of a set of literals in disjunction.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Clause(BTreeSet<Literal>);
 
 pub enum Evaluation {
@@ -48,7 +48,7 @@ impl Clause {
         }
 
         let mut assigned = 0;
-        let mut last_unknown = self.0.first().expect("clause cannot be empty");
+        let mut last_unknown = None;
         for lit in &self.0 {
             if assignment.has_literal(lit) {
                 return Evaluation::True;
@@ -56,14 +56,16 @@ impl Clause {
             if assignment.has_literal(&!lit) {
                 assigned += 1;
             } else {
-                last_unknown = lit;
+                last_unknown = Some(lit);
             }
         }
 
         if assigned == self.0.len() {
             Evaluation::False
         } else if assigned == self.0.len() - 1 {
-            Evaluation::Unit(*last_unknown)
+            Evaluation::Unit(
+                *last_unknown.expect("there should have been atleast one unassigned literal"),
+            )
         } else {
             Evaluation::Unknown
         }
@@ -87,6 +89,20 @@ impl Clause {
         right.remove(&!literal);
         left.extend(right.into_iter());
         Clause(left)
+    }
+
+    pub fn is_trivial(&self) -> bool {
+        let len = self.0.len();
+        len == 0 || len == 1
+    }
+
+    /// Return the single literal in the clause if the clause is a unit.
+    pub fn unit(&self) -> Option<Literal> {
+        if self.0.len() == 1 {
+            self.0.first().copied()
+        } else {
+            None
+        }
     }
 }
 

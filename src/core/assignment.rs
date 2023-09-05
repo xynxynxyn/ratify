@@ -1,26 +1,54 @@
-use std::{collections::HashSet, fmt::Display};
+use std::fmt::Display;
 
 use itertools::Itertools;
 
-use super::{Clause, Literal};
+use super::{Clause, Literal, MaybeConflict};
 /// A collection of literals which should all be true. Mainly used to evaluate a
 /// clause.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Assignment(HashSet<Literal>);
+pub struct Assignment(Vec<Literal>);
 
 impl Assignment {
     /// Create a new empty assignment.
     pub fn new() -> Self {
-        Assignment(HashSet::new())
+        Assignment(Vec::new())
     }
 
     /// Add a literal to the assignment.
-    pub fn add_literal(&mut self, lit: Literal) {
-        self.0.insert(lit);
+    pub fn assign(&mut self, lit: Literal) -> MaybeConflict {
+        if self.0.contains(&!lit) {
+            MaybeConflict::Conflict
+        } else {
+            if !self.0.contains(&lit) {
+                self.0.push(lit);
+            }
+            MaybeConflict::NoConflict
+        }
+    }
+
+    pub fn unassign(&mut self, lit: &Literal) {
+        for (i, l) in self.0.iter().enumerate() {
+            if lit == l {
+                self.0.swap_remove(i);
+                return;
+            }
+        }
     }
 
     pub fn has_literal(&self, lit: &Literal) -> bool {
-        self.0.contains(&lit)
+        self.0.contains(lit)
+    }
+
+    pub fn get_literal(&self, index: usize) -> Literal {
+        self.0[index]
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn literals(&self) -> impl Iterator<Item = &Literal> {
+        self.0.iter()
     }
 }
 

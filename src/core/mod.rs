@@ -9,3 +9,9 @@ pub use clause::*;
 pub use clause_storage::*;
 pub use lemma::*;
 pub use literal::*;
+
+#[derive(Debug)]
+pub enum MaybeConflict {
+    Conflict,
+    NoConflict
+}
