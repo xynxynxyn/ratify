@@ -1,5 +1,6 @@
 mod watcher;
 use watcher::Watcher;
+use indicatif::ProgressBar;
 
 use std::fmt::Display;
 
@@ -26,6 +27,12 @@ pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>) -> Verdict {
     // than the actual number of clauses depending on the number of deletions.
     let clause_count = clauses.len() + lemmas.len();
     let mut clause_db = ClauseStorage::with_capacity(clause_count);
+
+    // add all the initial clauses, this may introduce duplicates. This is not
+    // an issue however as the duplicates from the lemma should be marked as
+    // inactive.
+    clause_db.add_from_iter(clauses.into_iter(), true);
+
     // convert the lemmas into reflemmas, the same as before but they contain a
     // clause reference instead of a clause.
     let lemmas = lemmas
@@ -36,10 +43,7 @@ pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>) -> Verdict {
         })
         .collect_vec();
 
-    // add all the initial clauses, this may introduce duplicates. This is not
-    // an issue however as the duplicates from the lemma should be marked as
-    // inactive.
-    clause_db.add_from_iter(clauses.into_iter(), true);
+    debug!("clause database:\n{}", clause_db.dump());
 
     let watcher = Watcher::init(&clause_db);
 
@@ -59,9 +63,7 @@ impl Validator {
         info!("forward validating rup only");
         let mut empty_clause = false;
 
-        let mut processed = 0;
-        let log_cutoff = 100;
-        let max_lemmas = lemmas.len();
+        let bar = ProgressBar::new(lemmas.len() as u64);
 
         for lemma in lemmas {
             // verify each lemma in order
@@ -77,7 +79,10 @@ impl Validator {
                             self.clause_db.del_clause(*c_ref);
                         }
                     } else {
-                        debug!("clause did not exist {:?}", c_ref);
+                        debug!(
+                            "tried deleting clause, but did not exist {}",
+                            self.clause_db.get_any_clause(*c_ref)
+                        );
                     }
                 }
                 RefLemma::Addition(c_ref) => {
@@ -88,25 +93,24 @@ impl Validator {
                         empty_clause = true;
                     }
 
-                    // check if it's a unit
-                    if let Some(unit) = clause.unit() {
-                        debug!("proof has a unit {}, adding to assignment", unit);
-                        // if it is, add it to the assignment
-                        if let MaybeConflict::Conflict = self.assignment.assign(unit) {
-                            // TODO this should be a verification then?
-                            return Verdict::RefutationVerified;
-                        }
-                    }
-
                     // check if the lemma being added is redundant by first checking
                     // whether it is RUP, and if that doesn't work check if it is
                     // RAT
                     //if check_rup(&self.clause_db, clause) {
-                    if self.rup(clause) {
-                        debug!("lemma is RUP, extending clause database");
-                        self.clause_db.activate_clause(*c_ref);
-                    } else if check_rat(&self.clause_db, clause) {
-                        debug!("lemma is RAT, extending clause database");
+                    if self.rup(clause) || check_rat(&self.clause_db, clause) {
+                        debug!(
+                            "lemma is RUP or RAT, extending clause database with ({})",
+                            clause
+                        );
+                        if let Some(unit) = clause.unit() {
+                            // if we add a unit, add it to the assignment after
+                            // it is verified.
+                            if let MaybeConflict::Conflict = self.assignment.assign(unit) {
+                                // return early if this does
+                                return Verdict::EarlyRefutation;
+                            }
+                        }
+
                         self.clause_db.activate_clause(*c_ref);
                     } else {
                         debug!("lemma is neither RUP nor RAT, refuting proof");
@@ -117,11 +121,10 @@ impl Validator {
                 }
             }
 
-            processed += 1;
-            if processed % log_cutoff == 0 {
-                info!("processed {} out of {} lemmas", processed, max_lemmas);
-            }
+            bar.inc(1);
         }
+
+        bar.finish();
 
         // if we have not seen the empty clause yet and it is not RUP, then the
         // proof does not show a conflict and therefore there is no refutation to
@@ -148,7 +151,10 @@ impl Validator {
 
         // try to propagate the assignment
         match propagate(&self.clause_db, &self.watcher, &mut assignment) {
-            MaybeConflict::Conflict => true,
+            MaybeConflict::Conflict => {
+                debug!("({}) is RUP", lemma);
+                true
+            }
             MaybeConflict::NoConflict => false,
         }
     }
@@ -161,20 +167,22 @@ fn propagate(
     assignment: &mut Assignment,
 ) -> MaybeConflict {
     // non core unit propagation
-    debug!("applying unit propagation, before: {}", assignment);
+    trace!("applying unit propagation, before: ({})", assignment);
     // keep track of how many literals we processed
     let mut processed = 0;
 
+    let mut to_check = assignment.literals().cloned().collect_vec();
+
     loop {
-        if assignment.len() <= processed {
+        if to_check.len() <= processed {
             // if there are no more literals left and no conflict has been
             // found return that there is no conflict
-            trace!("processed entire assignment, after: {}", assignment);
+            trace!("processed entire assignment, after: ({})", assignment);
             return MaybeConflict::NoConflict;
         }
 
         // Get the first unprocessed literal
-        let literal = assignment.get_literal(processed);
+        let literal = to_check[processed];
         trace!("processing literal {}", literal);
         processed += 1;
 
@@ -210,13 +218,20 @@ fn propagate(
                     &assignment,
                 ) {
                     // found a unit
-                    debug!("found a unit {}, adding to assignment", unit);
+                    trace!("found a unit {}, adding to assignment", unit);
                     if let MaybeConflict::Conflict = assignment.assign(unit) {
                         // if the assignment results in a conflict, make
                         // sure to report that
-                        debug!("encountered conflict");
-                        debug!("after: {}", assignment);
+                        trace!("encountered conflict");
+                        trace!("after: {}", assignment);
                         return MaybeConflict::Conflict;
+                    } else {
+                        // if we successfully assigned something new to the
+                        // assignment, add it to the list
+                        // the given literal should not have been assigned
+                        // already, otherwise that should have been cought by
+                        // the satisfiability check earlier
+                        to_check.push(unit);
                     }
                 }
             }
@@ -230,6 +245,9 @@ pub enum Verdict {
     RefutationVerified,
     /// The refutation could not be validated as the clauses are not redundant.
     RefutationRefuted,
+    /// Returned if a refutation is encountered before the empty clause is
+    /// checked.
+    EarlyRefutation,
     /// The proof does not yield an empty clause. Therefore, there is no
     /// refutation to validate.
     NoConflict,

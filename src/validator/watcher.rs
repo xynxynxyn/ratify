@@ -6,6 +6,10 @@ use log::{info, trace};
 
 use crate::core::{Assignment, ClauseRef, ClauseStorage, Literal};
 
+// RefCell is used here because mutating the watcher does not change its ability
+// to function. No matter which literals in a clause are watched, as long as
+// they are not removed functionality is unchanged and using internal mutability
+// eases the borrow checker problems.
 pub struct Watcher {
     /// A mapping from literals to clauses, keeping track of which literals are
     /// associated with a clause. The invariant here is that every clause should
@@ -105,6 +109,7 @@ impl Watcher {
             // found an unassigned literal to switch to
             // remove the clause from the watchlist and then swap to the new one
             if let Some(w_list) = watchlist.get_mut(&literal.abs()) {
+                // performance leak here?
                 if let Some(index) = w_list.iter().position(|c| c_ref == *c) {
                     w_list.swap_remove(index);
                     trace!("removed clause from watchlist with index {}", index);

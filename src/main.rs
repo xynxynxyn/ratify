@@ -29,6 +29,7 @@ fn main() -> Result<()> {
     println!("{}", res);
     match res {
         Verdict::RefutationVerified => Ok(()),
+        Verdict::EarlyRefutation => bail!("early refutation detected"),
         Verdict::RefutationRefuted => bail!("refutation not verified"),
         Verdict::NoConflict => bail!("no conflict detected"),
     }

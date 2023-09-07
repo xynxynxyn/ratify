@@ -1,3 +1,8 @@
+use bimap::BiMap;
+use std::collections::HashMap;
+
+use itertools::Itertools;
+
 use super::Clause;
 
 /// A reference to a clause. We use this instead of normal references to avoid
@@ -12,22 +17,27 @@ pub struct ClauseRef(usize);
 /// find relevant clauses should be provided.
 #[derive(Debug)]
 pub struct ClauseStorage {
-    clauses: Vec<(Clause, bool)>,
+    mapping: BiMap<Clause, ClauseRef>,
+    // TODO make this a vec to index at some point
+    active: HashMap<ClauseRef, bool>,
 }
 
 impl ClauseStorage {
     /// Create a new clause storage with a certain capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         ClauseStorage {
-            clauses: Vec::with_capacity(capacity),
+            // TODO maybe change this to a static vec at some point and index
+            // directly instead of hashing
+            mapping: BiMap::with_capacity(capacity),
+            active: HashMap::with_capacity(capacity),
         }
     }
 
     /// Retrieve the clause associated with the reference. If the clause is not
     /// currently active as it has been deleted None is returned.
     pub fn get_clause(&self, clause_ref: ClauseRef) -> Option<&Clause> {
-        if let Some((c, true)) = self.clauses.get(clause_ref.0) {
-            Some(c)
+        if let Some(true) = self.active.get(&clause_ref) {
+            self.mapping.get_by_right(&clause_ref)
         } else {
             None
         }
@@ -37,51 +47,74 @@ impl ClauseStorage {
     /// the clause is active or not. This should never fail, if the clause does
     /// not exist it panics.
     pub fn get_any_clause(&self, clause_ref: ClauseRef) -> &Clause {
-        if let Some((c, _)) = self.clauses.get(clause_ref.0) {
-            c
-        } else {
-            panic!("unknown clause reference")
-        }
+        self.mapping
+            .get_by_right(&clause_ref)
+            .expect("unknown clause ref")
     }
 
     pub fn add_clause(&mut self, clause: Clause, active: bool) -> ClauseRef {
-        self.clauses.push((clause, active));
-        ClauseRef(self.clauses.len() - 1)
+        if let Some(c_ref) = self.mapping.get_by_left(&clause) {
+            // clause exists already, fetch c_ref and update activity if needed
+            if active {
+                *self.active.get_mut(c_ref).expect("unknown clause ref") = true;
+            }
+            *c_ref
+        } else {
+            // clause not already stored, add it
+            let c_ref = ClauseRef(self.mapping.len());
+            self.mapping.insert(clause, c_ref);
+            self.active.insert(c_ref, active);
+            c_ref
+        }
     }
 
     /// Add all clauses from the given iterator and set them to be active or
     /// inactive.
     pub fn add_from_iter(&mut self, clauses: impl Iterator<Item = Clause>, active: bool) {
-        self.clauses.extend(clauses.map(|c| (c, active)));
+        clauses.for_each(|clause| {
+            self.add_clause(clause, active);
+        })
     }
 
     /// Activate the provided clause in the storage.
     pub fn activate_clause(&mut self, clause_ref: ClauseRef) {
-        if let Some((_, b)) = self.clauses.get_mut(clause_ref.0) {
-            *b = true;
+        if let Some(a) = self.active.get_mut(&clause_ref) {
+            *a = true;
         }
     }
 
     /// Deactivates the provided clause.
     pub fn del_clause(&mut self, clause_ref: ClauseRef) {
-        self.clauses.get_mut(clause_ref.0).map(|_| false);
+        if let Some(a) = self.active.get_mut(&clause_ref) {
+            *a = false;
+        }
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = (ClauseRef, &Clause)> {
-        self.clauses
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (c, b))| if *b { Some((ClauseRef(i), c)) } else { None })
+        self.mapping.iter().filter_map(|(clause, c_ref)| {
+            if let Some(true) = self.active.get(c_ref) {
+                Some((*c_ref, clause))
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn all_clause_refs(&self) -> impl Iterator<Item = ClauseRef> {
-        (0..self.clauses.len()).map(|i| ClauseRef(i))
+    pub fn all_clause_refs(&self) -> impl Iterator<Item = ClauseRef> + '_ {
+        self.mapping.iter().map(|(_, c_ref)| *c_ref)
     }
 
-    pub fn clause_refs(&self) -> impl Iterator<Item = ClauseRef> + '_ {
-        self.clauses
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (_, b))| if *b { Some(ClauseRef(i)) } else { None })
+    pub fn dump(&self) -> String {
+        Itertools::intersperse(
+            self.mapping.iter().map(|(clause, c_ref)| {
+                format!(
+                    "{} | ({})",
+                    self.active.get(c_ref).expect("invalid clause ref"),
+                    clause
+                )
+            }),
+            "\n".to_string(),
+        )
+        .collect()
     }
 }
