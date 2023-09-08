@@ -1,6 +1,6 @@
 mod watcher;
-use watcher::Watcher;
 use indicatif::ProgressBar;
+use watcher::Watcher;
 
 use std::fmt::Display;
 

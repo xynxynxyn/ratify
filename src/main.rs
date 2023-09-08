@@ -10,19 +10,29 @@ mod validator;
 
 use crate::validator::{validate, Verdict};
 use anyhow::{bail, Result};
-use std::env;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+struct Features {
+    #[arg(short, long)]
+    /// Apply all deletions as they occur. This often invalidates the proof as
+    /// unit deletions are common and do not preserve satisfiability.
+    strict: bool,
+    #[arg(short, long)]
+    /// Only do RUP checking, skip any RAT check and assume invalid for those
+    /// lemmas.
+    rup_only: bool,
+    cnf: String,
+    proof: String,
+}
 
 fn main() -> Result<()> {
     env_logger::init();
-
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        bail!("usage: ratify [DIMACS] [DRAT]");
-    }
+    let features = Features::parse();
 
     // parse the input files
-    let (_, clauses) = parser::cnf::parse(&std::fs::read_to_string(&args[1])?)?;
-    let lemmas = parser::drat::parse(&std::fs::read_to_string(&args[2])?)?;
+    let (_, clauses) = parser::cnf::parse(&std::fs::read_to_string(features.cnf)?)?;
+    let lemmas = parser::drat::parse(&std::fs::read_to_string(features.proof)?)?;
 
     // validate the proof against the clauses
     let res = validate(clauses, lemmas);
