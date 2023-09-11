@@ -13,6 +13,7 @@ struct Entry {
 #[derive(Debug)]
 pub struct Watcher {
     inner: RefCell<Vec<Option<Entry>>>,
+    // TODO add another datastruct here to speed up watched_by?
 }
 
 impl Watcher {
@@ -58,24 +59,39 @@ impl Watcher {
 
     /// Return all the clause references that are currently watching a given
     /// symbol.
-    // TODO make this an iterator, check:
-    // https://users.rust-lang.org/t/return-an-iterator-from-struct-in-refcell/86580/2
-    pub fn watched_by(&self, sym: Symbol) -> Vec<ClauseRef> {
-        self.inner
-            .borrow()
-            .iter()
-            .filter_map(move |e| {
-                if let Some(e) = e {
-                    if e.symbols.0 == sym || e.symbols.1 == sym {
-                        Some(e.c_ref)
-                    } else {
-                        None
+    pub fn watched_by(&self, sym: Symbol) -> impl Iterator<Item = ClauseRef> + '_ {
+        // make this an iterator, check:
+        // https://users.rust-lang.org/t/return-an-iterator-from-struct-in-refcell/86580/2
+        struct CRefIter<'a> {
+            rc: &'a Watcher,
+            pos: usize,
+            sym: Symbol,
+        }
+
+        impl<'a> Iterator for CRefIter<'a> {
+            type Item = ClauseRef;
+            fn next(&mut self) -> Option<Self::Item> {
+                let inner = self.rc.inner.borrow();
+                loop {
+                    if self.pos >= inner.len() {
+                        return None;
                     }
-                } else {
-                    None
+                    let pos = self.pos;
+                    self.pos += 1;
+                    if let Some(e) = &inner[pos] {
+                        if e.symbols.0 == self.sym || e.symbols.1 == self.sym {
+                            return Some(e.c_ref);
+                        }
+                    }
                 }
-            })
-            .collect_vec()
+            }
+        }
+
+        CRefIter {
+            rc: self,
+            pos: 0,
+            sym,
+        }
     }
 
     /// Mutates the watcher to unwatch the symbol for the given clause. A new
