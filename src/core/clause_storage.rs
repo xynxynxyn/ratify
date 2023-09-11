@@ -1,5 +1,4 @@
 use bimap::BiMap;
-use std::collections::HashMap;
 
 use super::Clause;
 
@@ -22,25 +21,25 @@ impl ClauseRef {
 #[derive(Debug)]
 pub struct ClauseStorage {
     mapping: BiMap<Clause, ClauseRef>,
-    // TODO make this a vec to index at some point
-    active: HashMap<ClauseRef, bool>,
+    active: Vec<bool>,
 }
 
 impl ClauseStorage {
-    /// Create a new clause storage with a certain capacity.
+    /// Create a new clause storage with a certain capacity. Adding more clauses
+    /// to the storage than specified by capacity may lead to crashes.
     pub fn with_capacity(capacity: usize) -> Self {
         ClauseStorage {
             // TODO maybe change this to a static vec at some point and index
             // directly instead of hashing
             mapping: BiMap::with_capacity(capacity),
-            active: HashMap::with_capacity(capacity),
+            active: vec![false; capacity],
         }
     }
 
     /// Retrieve the clause associated with the reference. If the clause is not
     /// currently active as it has been deleted None is returned.
     pub fn get_clause(&self, clause_ref: ClauseRef) -> Option<&Clause> {
-        if let Some(true) = self.active.get(&clause_ref) {
+        if let Some(true) = self.active.get(clause_ref.to_index()) {
             self.mapping.get_by_right(&clause_ref)
         } else {
             None
@@ -48,7 +47,10 @@ impl ClauseStorage {
     }
 
     pub fn is_active(&self, clause_ref: ClauseRef) -> bool {
-        *self.active.get(&clause_ref).expect("invalid clause ref")
+        *self
+            .active
+            .get(clause_ref.to_index())
+            .expect("invalid clause ref")
     }
 
     /// Retrieve the clause associated with the reference. It does not matter if
@@ -64,14 +66,17 @@ impl ClauseStorage {
         if let Some(c_ref) = self.mapping.get_by_left(&clause) {
             // clause exists already, fetch c_ref and update activity if needed
             if active {
-                *self.active.get_mut(c_ref).expect("unknown clause ref") = true;
+                *self
+                    .active
+                    .get_mut(c_ref.to_index())
+                    .expect("unknown clause ref") = true;
             }
             *c_ref
         } else {
             // clause not already stored, add it
             let c_ref = ClauseRef(self.mapping.len());
             self.mapping.insert(clause, c_ref);
-            self.active.insert(c_ref, active);
+            self.active[c_ref.to_index()] = active;
             c_ref
         }
     }
@@ -86,21 +91,21 @@ impl ClauseStorage {
 
     /// Activate the provided clause in the storage.
     pub fn activate_clause(&mut self, clause_ref: ClauseRef) {
-        if let Some(a) = self.active.get_mut(&clause_ref) {
+        if let Some(a) = self.active.get_mut(clause_ref.to_index()) {
             *a = true;
         }
     }
 
     /// Deactivates the provided clause.
     pub fn del_clause(&mut self, clause_ref: ClauseRef) {
-        if let Some(a) = self.active.get_mut(&clause_ref) {
+        if let Some(a) = self.active.get_mut(clause_ref.to_index()) {
             *a = false;
         }
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = (ClauseRef, &Clause)> {
         self.mapping.iter().filter_map(|(clause, c_ref)| {
-            if let Some(true) = self.active.get(c_ref) {
+            if let Some(true) = self.active.get(c_ref.to_index()) {
                 Some((*c_ref, clause))
             } else {
                 None
