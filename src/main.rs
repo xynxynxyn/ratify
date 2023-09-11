@@ -7,13 +7,15 @@ mod core;
 mod parser;
 /// Implementation of the validation algorithms.
 mod validator;
+/// Trait and implementation of the watcher struct for fast unit propagation.
+mod watcher;
 
 use crate::validator::{validate, Verdict};
 use anyhow::{bail, Result};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-struct Features {
+pub struct Features {
     #[arg(short, long)]
     /// Apply all deletions as they occur. This often invalidates the proof as
     /// unit deletions are common and do not preserve satisfiability.
@@ -22,6 +24,8 @@ struct Features {
     /// Only do RUP checking, skip any RAT check and assume invalid for those
     /// lemmas.
     rup_only: bool,
+    #[arg(short, long)]
+    progress: bool,
     cnf: String,
     proof: String,
 }
@@ -31,11 +35,11 @@ fn main() -> Result<()> {
     let features = Features::parse();
 
     // parse the input files
-    let (_, clauses) = parser::cnf::parse(&std::fs::read_to_string(features.cnf)?)?;
-    let lemmas = parser::drat::parse(&std::fs::read_to_string(features.proof)?)?;
+    let (_, clauses) = parser::cnf::parse(&std::fs::read_to_string(&features.cnf)?)?;
+    let lemmas = parser::drat::parse(&std::fs::read_to_string(&features.proof)?)?;
 
     // validate the proof against the clauses
-    let res = validate(clauses, lemmas);
+    let res = validate(clauses, lemmas, features);
     println!("{}", res);
     match res {
         Verdict::RefutationVerified => Ok(()),

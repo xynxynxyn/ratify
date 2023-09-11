@@ -1,8 +1,6 @@
 use bimap::BiMap;
 use std::collections::HashMap;
 
-use itertools::Itertools;
-
 use super::Clause;
 
 /// A reference to a clause. We use this instead of normal references to avoid
@@ -11,6 +9,12 @@ use super::Clause;
 /// really invalidated.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ClauseRef(usize);
+
+impl ClauseRef {
+    pub fn to_index(&self) -> usize {
+        self.0
+    }
+}
 
 /// The purpose of this data structure is to efficiently store clauses, which
 /// are a collection of literals. A variety of methods to easily and quickly
@@ -41,6 +45,10 @@ impl ClauseStorage {
         } else {
             None
         }
+    }
+
+    pub fn is_active(&self, clause_ref: ClauseRef) -> bool {
+        *self.active.get(&clause_ref).expect("invalid clause ref")
     }
 
     /// Retrieve the clause associated with the reference. It does not matter if
@@ -104,17 +112,7 @@ impl ClauseStorage {
         self.mapping.iter().map(|(_, c_ref)| *c_ref)
     }
 
-    pub fn dump(&self) -> String {
-        Itertools::intersperse(
-            self.mapping.iter().map(|(clause, c_ref)| {
-                format!(
-                    "{} | ({})",
-                    self.active.get(c_ref).expect("invalid clause ref"),
-                    clause
-                )
-            }),
-            "\n".to_string(),
-        )
-        .collect()
+    pub fn size(&self) -> usize {
+        self.mapping.len()
     }
 }

@@ -14,11 +14,6 @@ pub enum Evaluation {
 }
 
 impl Clause {
-    /// Create the empty clause.
-    pub fn empty() -> Self {
-        Clause(BTreeSet::new())
-    }
-
     /// Create a new clause from an iterator of literals.
     pub fn from_iter(literals: impl Iterator<Item = Literal>) -> Self {
         Clause(BTreeSet::from_iter(literals))
@@ -50,10 +45,10 @@ impl Clause {
         let mut assigned = 0;
         let mut last_unknown = None;
         for lit in &self.0 {
-            if assignment.has_literal(lit) {
+            if assignment.has_literal(*lit) {
                 return Evaluation::True;
             }
-            if assignment.has_literal(&!lit) {
+            if assignment.has_literal(!lit) {
                 assigned += 1;
             } else {
                 last_unknown = Some(lit);
@@ -74,7 +69,7 @@ impl Clause {
     // Returns true if only a single literal is true or unknown in the clause.
     pub fn is_unit(&self, assignment: &Assignment) -> bool {
         self.literals()
-            .filter(|lit| !assignment.has_literal(&!*lit))
+            .filter(|lit| !assignment.has_literal(!*lit))
             .count()
             == 1
     }
@@ -93,7 +88,7 @@ impl Clause {
 
     pub fn is_trivial(&self) -> bool {
         let len = self.0.len();
-        len == 0 || len == 1
+        len <= 1
     }
 
     /// Return the single literal in the clause if the clause is a unit.

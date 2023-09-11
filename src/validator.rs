@@ -1,14 +1,16 @@
-mod watcher;
+use crate::{core::Symbol, watcher::Watcher};
 use indicatif::ProgressBar;
-use watcher::Watcher;
 
 use std::fmt::Display;
 
 use itertools::Itertools;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, log_enabled, trace};
 
-use crate::core::{
-    Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal, MaybeConflict, RefLemma,
+use crate::{
+    core::{
+        Assignment, Clause, ClauseStorage, Evaluation, Lemma, Literal, MaybeConflict, RefLemma,
+    },
+    Features,
 };
 
 /// Validator struct that tracks the state of the validation process.
@@ -22,7 +24,7 @@ struct Validator {
     assignment: Assignment,
 }
 
-pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>) -> Verdict {
+pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>, features: Features) -> Verdict {
     // determine the upper limit of clauses. this may be significantly larger
     // than the actual number of clauses depending on the number of deletions.
     let clause_count = clauses.len() + lemmas.len();
@@ -43,27 +45,45 @@ pub fn validate(clauses: Vec<Clause>, lemmas: Vec<Lemma>) -> Verdict {
         })
         .collect_vec();
 
-    debug!("clause database:\n{}", clause_db.dump());
+    info!("populating watchlist and watchtracker");
+    let watcher = Watcher::new(&clause_db);
 
-    let watcher = Watcher::init(&clause_db);
+    info!("assigning units from initial formula");
+    let mut assignment = Assignment::new();
+    for lit in clause_db.clauses().filter_map(|(_, clause)| clause.unit()) {
+        if assignment.conflicts(lit) {
+            error!("prepropagation yields conflict on ({})", lit);
+            return Verdict::EarlyRefutation;
+        }
+        assignment.assign(lit);
+    }
+
+    if let MaybeConflict::Conflict = propagate(&clause_db, &watcher, &mut assignment) {
+        error!("prepropagation yields conflict");
+        return Verdict::EarlyRefutation;
+    }
+    debug!("prepropagation result ({})", assignment);
 
     let validator = Validator {
         clause_db,
         watcher,
-        assignment: Assignment::new(),
+        assignment,
     };
 
-    validator.forward_validate(&lemmas)
+    validator.forward_validate(&lemmas, features)
 }
 
 impl Validator {
     /// Sequentially validate each lemma by checking if it has the RUP property.
     /// Clauses are added and removed from the clause database during this process.
-    fn forward_validate(mut self, lemmas: &[RefLemma]) -> Verdict {
-        info!("forward validating rup only");
-        let mut empty_clause = false;
+    fn forward_validate(mut self, lemmas: &[RefLemma], features: Features) -> Verdict {
+        info!("forward validating only");
 
-        let bar = ProgressBar::new(lemmas.len() as u64);
+        let bar = if features.progress {
+            ProgressBar::new(lemmas.len() as u64)
+        } else {
+            ProgressBar::hidden()
+        };
 
         for lemma in lemmas {
             // verify each lemma in order
@@ -73,69 +93,62 @@ impl Validator {
                     // ignore their deletion
                     if let Some(clause) = self.clause_db.get_clause(*c_ref) {
                         if clause.is_unit(&self.assignment) {
-                            debug!("skipping unit clause deletion for ({})", clause);
+                            debug!("is unit clause, skipping deletion ({})", clause);
                         } else {
-                            debug!("deleted clause ({})", clause);
+                            trace!("delete ({})", clause);
                             self.clause_db.del_clause(*c_ref);
                         }
                     } else {
-                        debug!(
-                            "tried deleting clause, but did not exist {}",
+                        error!(
+                            "tried delete but did not exist ({})",
                             self.clause_db.get_any_clause(*c_ref)
                         );
                     }
                 }
                 RefLemma::Addition(c_ref) => {
                     let clause = self.clause_db.get_any_clause(*c_ref);
-                    debug!("checking lemma ({})", clause);
-                    // check if we encountered the empty clause
-                    if clause.is_empty() {
-                        empty_clause = true;
-                    }
+                    debug!("checking ({})", clause);
 
                     // check if the lemma being added is redundant by first checking
                     // whether it is RUP, and if that doesn't work check if it is
                     // RAT
-                    //if check_rup(&self.clause_db, clause) {
-                    if self.rup(clause) || check_rat(&self.clause_db, clause) {
-                        debug!(
-                            "lemma is RUP or RAT, extending clause database with ({})",
-                            clause
-                        );
+                    if self.rup(clause)
+                        || (!features.rup_only && check_rat(&self.clause_db, clause))
+                    {
+                        if clause.is_empty() {
+                            debug!("verified the empty clause, refutation validated");
+                            return Verdict::RefutationVerified;
+                        }
+                        debug!("is redundant ({})", clause);
                         if let Some(unit) = clause.unit() {
                             // if we add a unit, add it to the assignment after
                             // it is verified.
-                            if let MaybeConflict::Conflict = self.assignment.assign(unit) {
-                                // return early if this does
-                                return Verdict::EarlyRefutation;
-                            }
+                            // this may already conflict with the assignment,
+                            // but we don't check it since the lemma is RUP
+                            debug!("found unit in proof {}", unit);
+                            self.assignment.assign(unit);
                         }
 
                         self.clause_db.activate_clause(*c_ref);
                     } else {
-                        debug!("lemma is neither RUP nor RAT, refuting proof");
+                        error!("lemma not redundant, proof refuted ({})", clause);
                         return Verdict::RefutationRefuted;
                     }
 
+                    trace!("propagating from ({})", self.assignment);
                     propagate(&self.clause_db, &mut self.watcher, &mut self.assignment);
+                    trace!("propagating to ({})", self.assignment);
                 }
             }
 
             bar.inc(1);
         }
 
-        bar.finish();
-
         // if we have not seen the empty clause yet and it is not RUP, then the
         // proof does not show a conflict and therefore there is no refutation to
         // verify
-        if !empty_clause && !check_rup(&self.clause_db, &Clause::empty()) {
-            error!("no conflict detected");
-            Verdict::NoConflict
-        } else {
-            info!("refutation verified");
-            Verdict::RefutationVerified
-        }
+        error!("no conflict detected or empty clause present");
+        Verdict::NoConflict
     }
 
     /// Check if the given clause has the rup property
@@ -144,17 +157,16 @@ impl Validator {
         // the lemma as units
         let mut assignment = self.assignment.clone();
         for lit in lemma.literals() {
-            if let MaybeConflict::Conflict = assignment.assign(!lit) {
+            if assignment.conflicts(!lit) {
+                trace!("inverting lemma lead to conflict on {} in ({})", lit, lemma);
                 return true;
             }
+            assignment.assign(!lit);
         }
 
         // try to propagate the assignment
         match propagate(&self.clause_db, &self.watcher, &mut assignment) {
-            MaybeConflict::Conflict => {
-                debug!("({}) is RUP", lemma);
-                true
-            }
+            MaybeConflict::Conflict => true,
             MaybeConflict::NoConflict => false,
         }
     }
@@ -171,7 +183,7 @@ fn propagate(
     // keep track of how many literals we processed
     let mut processed = 0;
 
-    let mut to_check = assignment.literals().cloned().collect_vec();
+    let mut to_check = assignment.literals().copied().collect_vec();
 
     loop {
         if to_check.len() <= processed {
@@ -189,18 +201,29 @@ fn propagate(
         // go through all the clauses which watch the current literal
         // we have to collect into a vec here because we mutate the watcher
         // inside the loop.
-        for c_ref in watcher.watched_by(literal) {
+        for c_ref in watcher.watched_by(Symbol::from(literal)) {
+            if !clause_db.is_active(c_ref) {
+                continue;
+            }
+
             // get both the literals that this clause is watching
             if let Some((lit1, mut lit2)) = watcher.watches(c_ref) {
-                if lit1 == literal || lit2 == literal {
+                // check if one of the watched literals is satisfied
+                if assignment.has_literal(lit1) || assignment.has_literal(lit2) {
                     // if the clause is satisfied, ignore and keep them on the
                     // same watchlists.
+                    trace!(
+                        "skipping satisfied clause ({}) via {} or {}",
+                        clause_db.get_clause(c_ref).unwrap(),
+                        lit1,
+                        lit2
+                    );
                     continue;
                 }
 
                 // swap around the literals to make sure that lit2 is the
                 // known literal.
-                if lit1.equal(&literal) {
+                if Symbol::from(lit1) == Symbol::from(literal) {
                     lit2 = lit1;
                 }
 
@@ -210,28 +233,41 @@ fn propagate(
 
                 // unwatch the literal we just checked
                 // this step also
-                if let Some(unit) = watcher.unwatch_and_watch(
+                if let Some(unit) = watcher.update(
                     c_ref,
                     // lit2 is the known literal here that we just checked
-                    lit2,
+                    Symbol::from(lit2),
                     &clause_db,
                     &assignment,
                 ) {
                     // found a unit
-                    trace!("found a unit {}, adding to assignment", unit);
-                    if let MaybeConflict::Conflict = assignment.assign(unit) {
+                    trace!(
+                        "found unit {} in clause ({}), adding  to assignment",
+                        unit,
+                        clause_db.get_clause(c_ref).unwrap(),
+                    );
+                    if assignment.conflicts(unit) {
                         // if the assignment results in a conflict, make
                         // sure to report that
                         trace!("encountered conflict");
                         trace!("after: {}", assignment);
                         return MaybeConflict::Conflict;
-                    } else {
+                    }
+                    if assignment.assign(unit) {
                         // if we successfully assigned something new to the
-                        // assignment, add it to the list
-                        // the given literal should not have been assigned
-                        // already, otherwise that should have been cought by
-                        // the satisfiability check earlier
+                        // assignment, add it to the list of literals to check
+                        trace!("added {}, now ({})", unit, assignment);
                         to_check.push(unit);
+                    }
+                } else {
+                    if log_enabled!(log::Level::Trace) {
+                        let (left, right) = watcher.watches(c_ref).unwrap();
+                        trace!(
+                            "({}) now watches new {} and {}",
+                            clause_db.get_clause(c_ref).unwrap(),
+                            left,
+                            right
+                        );
                     }
                 }
             }

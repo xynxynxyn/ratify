@@ -1,20 +1,18 @@
 use std::{fmt::Display, ops::Not};
 
-/// The smallest data type representing a single variable.
+/// The symbol of a literal. The value inside may never be negated or be zero.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct Literal(i32);
+pub struct Symbol(i32);
 
-impl Literal {
-    pub fn abs(&self) -> Literal {
-        Literal(self.0.abs())
-    }
-
-    /// Check if self and other are the same symbol. Negation does not apply
-    /// here.
-    pub fn equal(&self, other: &Literal) -> bool {
-        self.abs() == other.abs()
+impl From<Literal> for Symbol {
+    fn from(value: Literal) -> Self {
+        Symbol(value.0.abs())
     }
 }
+
+/// An instantiation of a symbol, can also be negated.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub struct Literal(i32);
 
 impl From<i32> for Literal {
     fn from(id: i32) -> Self {
