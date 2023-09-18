@@ -1,15 +1,57 @@
 mod forward;
 
-use std::fmt::Display;
-
+use anyhow::anyhow;
 pub use forward::*;
 
-use crate::{core::Symbol, watcher::Watcher};
-
+use crate::{core::Symbol, watcher::Watcher, Features};
 use itertools::Itertools;
-use log::{log_enabled, trace};
+use log::{debug, info, log_enabled, trace};
+use std::fmt::Display;
 
 use crate::core::{Assignment, ClauseStorage, MaybeConflict, RefLemma};
+
+struct State {
+    /// Storage for all clauses
+    clause_db: ClauseStorage,
+    /// Watcher keeps track of watched literal responsibilities and
+    /// functioniality
+    watcher: Watcher,
+    /// The current assignment
+    assignment: Assignment,
+    /// List of features enabled
+    features: Features,
+}
+
+impl State {
+    fn init(clause_db: ClauseStorage, features: Features) -> anyhow::Result<Self> {
+        info!("populating watchlist and watchtracker");
+        let watcher = Watcher::new(&clause_db);
+
+        info!("assigning units from initial formula");
+        let mut assignment = Assignment::new();
+        for lit in clause_db.clauses().filter_map(|(_, clause)| clause.unit()) {
+            if assignment.conflicts(lit) {
+                return Err(anyhow!(
+                    "propagation yields early conflict on literal {}",
+                    lit
+                ));
+            }
+            assignment.assign(lit);
+        }
+
+        if let MaybeConflict::Conflict = propagate(&clause_db, &watcher, &mut assignment) {
+            return Err(anyhow!("prepropagation yields conflict"));
+        }
+        debug!("prepropagation result ({})", assignment);
+
+        Ok(State {
+            clause_db,
+            watcher,
+            assignment,
+            features,
+        })
+    }
+}
 
 /// The end result of checking a proof against a formula.
 pub enum Verdict {
