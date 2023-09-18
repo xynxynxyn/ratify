@@ -6,13 +6,6 @@ use super::{Assignment, Literal};
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Clause(BTreeSet<Literal>);
 
-pub enum Evaluation {
-    Unit(Literal),
-    True,
-    False,
-    Unknown,
-}
-
 impl Clause {
     /// Create a new clause from an iterator of literals.
     pub fn from_iter(literals: impl Iterator<Item = Literal>) -> Self {
@@ -33,37 +26,6 @@ impl Clause {
     /// true if it contains the negated literal.
     pub fn has_literal(&self, literal: Literal) -> bool {
         self.0.contains(&literal)
-    }
-
-    /// Given an assignment of literals, give an evaluation of the clause. If a
-    /// unit is encountered, return the unknown literal.
-    pub fn eval(&self, assignment: &Assignment) -> Evaluation {
-        if self.0.is_empty() {
-            return Evaluation::False;
-        }
-
-        let mut assigned = 0;
-        let mut last_unknown = None;
-        for lit in &self.0 {
-            if assignment.has_literal(*lit) {
-                return Evaluation::True;
-            }
-            if assignment.has_literal(!lit) {
-                assigned += 1;
-            } else {
-                last_unknown = Some(lit);
-            }
-        }
-
-        if assigned == self.0.len() {
-            Evaluation::False
-        } else if assigned == self.0.len() - 1 {
-            Evaluation::Unit(
-                *last_unknown.expect("there should have been atleast one unassigned literal"),
-            )
-        } else {
-            Evaluation::Unknown
-        }
     }
 
     // Returns true if only a single literal is true or unknown in the clause.

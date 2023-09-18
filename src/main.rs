@@ -10,9 +10,13 @@ mod validator;
 /// Trait and implementation of the watcher struct for fast unit propagation.
 mod watcher;
 
-use crate::validator::{validate, Verdict};
+use crate::{
+    core::{ClauseStorage, Lemma, RefLemma},
+    validator::{ForwardValidator, Validator, Verdict},
+};
 use anyhow::{bail, Result};
 use clap::Parser;
+use itertools::Itertools;
 
 #[derive(Parser, Debug)]
 pub struct Features {
@@ -38,8 +42,23 @@ fn main() -> Result<()> {
     let (_, clauses) = parser::cnf::parse(&std::fs::read_to_string(&features.cnf)?)?;
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&features.proof)?)?;
 
+    let mut clause_db = ClauseStorage::with_capacity(clauses.len() + lemmas.len());
+    // populate clause storage with formula clauses
+    clause_db.add_from_iter(clauses.into_iter(), true);
+    // add proof lemma clauses to storage and convert them to RefLemma's that use ClauseRef instead
+    // of clauses.
+    let lemmas = lemmas
+        .into_iter()
+        .map(|lemma| match lemma {
+            Lemma::Addition(c) => RefLemma::Addition(clause_db.add_clause(c, false)),
+            Lemma::Deletion(c) => RefLemma::Deletion(clause_db.add_clause(c, false)),
+        })
+        .collect_vec();
+
+    let validator = ForwardValidator::init(clause_db, features)?;
+
     // validate the proof against the clauses
-    let res = validate(clauses, lemmas, features);
+    let res = validator.validate(&lemmas);
     println!("{}", res);
     match res {
         Verdict::RefutationVerified => Ok(()),
