@@ -141,10 +141,11 @@ impl Watcher {
     }
 }
 
+// find the next literal that is not falsified
 fn find_next_unassigned(clause: &Clause, assg: &Assignment, except: Literal) -> Option<Literal> {
     clause
         .literals()
-        .filter(|&lit| *lit != except && !assg.has_symbol(Symbol::from(*lit)))
+        .filter(|&lit| *lit != except && !assg.has_literal(!*lit))
         .next()
         .copied()
 }

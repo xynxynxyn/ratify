@@ -1,15 +1,19 @@
+mod backward;
 mod forward;
 
-use anyhow::anyhow;
-pub use forward::*;
+pub use backward::BackwardValidator;
+pub use forward::ForwardValidator;
 
 use crate::{core::Symbol, watcher::Watcher, Features};
 use itertools::Itertools;
-use log::{debug, info, log_enabled, trace};
+use log::{info, log_enabled, trace};
 use std::fmt::Display;
 
 use crate::core::{Assignment, ClauseStorage, MaybeConflict, RefLemma};
 
+use self::backward::CoreList;
+
+/// Common state shared between all implementations of the Validator trait.
 struct State {
     /// Storage for all clauses
     clause_db: ClauseStorage,
@@ -27,27 +31,10 @@ impl State {
         info!("populating watchlist and watchtracker");
         let watcher = Watcher::new(&clause_db);
 
-        info!("assigning units from initial formula");
-        let mut assignment = Assignment::new();
-        for lit in clause_db.clauses().filter_map(|(_, clause)| clause.unit()) {
-            if assignment.conflicts(lit) {
-                return Err(anyhow!(
-                    "propagation yields early conflict on literal {}",
-                    lit
-                ));
-            }
-            assignment.assign(lit);
-        }
-
-        if let MaybeConflict::Conflict = propagate(&clause_db, &watcher, &mut assignment) {
-            return Err(anyhow!("prepropagation yields conflict"));
-        }
-        debug!("prepropagation result ({})", assignment);
-
         Ok(State {
             clause_db,
             watcher,
-            assignment,
+            assignment: Assignment::new(),
             features,
         })
     }
@@ -78,7 +65,7 @@ impl Display for Verdict {
 
 /// The core validator trait, simply validates the given list of lemmas.
 pub trait Validator {
-    fn validate(self, lemmas: &[RefLemma]) -> Verdict;
+    fn validate(self, lemmas: Vec<RefLemma>) -> Verdict;
 }
 
 /// Apply unit propagation and update the given assignment correspondingly.
@@ -86,11 +73,28 @@ fn propagate(
     clause_db: &ClauseStorage,
     watcher: &Watcher,
     assignment: &mut Assignment,
+    core_list: Option<&mut CoreList>,
 ) -> MaybeConflict {
+    let with_core = core_list.is_some();
+    let mut unit_stack = vec![];
     // non core unit propagation
     trace!("applying unit propagation, before: ({})", assignment);
     // keep track of how many literals we processed
     let mut processed = 0;
+
+    for (c_ref, clause) in clause_db.clauses() {
+        if let Some(unit) = clause.unit() {
+            if assignment.conflicts(unit) {
+                trace!("conflict on unit ({})", unit);
+                return MaybeConflict::Conflict;
+            }
+            assignment.assign(unit);
+
+            if with_core {
+                unit_stack.push(c_ref);
+            }
+        }
+    }
 
     let mut to_check = assignment.literals().copied().collect_vec();
 
@@ -160,6 +164,13 @@ fn propagate(
                         // sure to report that
                         trace!("encountered conflict");
                         trace!("after: {}", assignment);
+                        if with_core {
+                            // with_core variable guarantees that core_list exists.
+                            // mark all relevant clauses
+                            core_list
+                                .expect("corelist should have been some")
+                                .mark_core(c_ref, unit_stack, clause_db);
+                        }
                         return MaybeConflict::Conflict;
                     }
                     if assignment.assign(unit) {
@@ -167,6 +178,9 @@ fn propagate(
                         // assignment, add it to the list of literals to check
                         trace!("added {}, now ({})", unit, assignment);
                         to_check.push(unit);
+                        if with_core {
+                            unit_stack.push(c_ref);
+                        }
                     }
                 } else {
                     if log_enabled!(log::Level::Trace) {

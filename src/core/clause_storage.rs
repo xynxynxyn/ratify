@@ -6,7 +6,7 @@ use super::Clause;
 /// issues with the borrow checker. This only works because we never actually
 /// delete allocations from the clause storage and any clause reference is never
 /// really invalidated.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClauseRef(usize);
 
 impl ClauseRef {
@@ -60,6 +60,11 @@ impl ClauseStorage {
         self.mapping
             .get_by_right(&clause_ref)
             .expect("unknown clause ref")
+    }
+
+    /// Deactivate all clauses.
+    pub fn clean(&mut self) {
+        self.active = vec![false; self.size()];
     }
 
     pub fn add_clause(&mut self, clause: Clause, active: bool) -> ClauseRef {

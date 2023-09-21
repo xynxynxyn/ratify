@@ -12,7 +12,7 @@ mod watcher;
 
 use crate::{
     core::{ClauseStorage, Lemma, RefLemma},
-    validator::{ForwardValidator, Validator, Verdict},
+    validator::{BackwardValidator, ForwardValidator, Validator, Verdict},
 };
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -30,6 +30,8 @@ pub struct Features {
     rup_only: bool,
     #[arg(short, long)]
     progress: bool,
+    #[arg(short, long)]
+    forward: bool,
     cnf: String,
     proof: String,
 }
@@ -55,10 +57,13 @@ fn main() -> Result<()> {
         })
         .collect_vec();
 
-    let validator = ForwardValidator::init(clause_db, features)?;
-
     // validate the proof against the clauses
-    let res = validator.validate(&lemmas);
+    let res = if features.forward {
+        ForwardValidator::init(clause_db, features)?.validate(lemmas)
+    } else {
+        BackwardValidator::init(clause_db, features)?.validate(lemmas)
+    };
+
     println!("{}", res);
     match res {
         Verdict::RefutationVerified => Ok(()),

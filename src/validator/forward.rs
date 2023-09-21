@@ -34,7 +34,7 @@ impl ForwardValidator {
         }
 
         // try to propagate the assignment
-        match propagate(&self.state.clause_db, &self.state.watcher, &mut asg) {
+        match propagate(&self.state.clause_db, &self.state.watcher, &mut asg, None) {
             MaybeConflict::Conflict => true,
             MaybeConflict::NoConflict => false,
         }
@@ -83,8 +83,33 @@ impl ForwardValidator {
 impl Validator for ForwardValidator {
     /// Sequentially validate each lemma by checking if it has the RUP property.
     /// Clauses are added and removed from the clause database during this process.
-    fn validate(mut self, lemmas: &[RefLemma]) -> Verdict {
-        info!("forward validating only");
+    fn validate(mut self, lemmas: Vec<RefLemma>) -> Verdict {
+        info!("forward validating");
+
+        info!("assigning units from initial formula");
+        for lit in self
+            .state
+            .clause_db
+            .clauses()
+            .filter_map(|(_, clause)| clause.unit())
+        {
+            if self.state.assignment.conflicts(lit) {
+                error!("propagation yields early conflict on literal {}", lit);
+                return Verdict::EarlyRefutation;
+            }
+            self.state.assignment.assign(lit);
+        }
+
+        if let MaybeConflict::Conflict = propagate(
+            &self.state.clause_db,
+            &self.state.watcher,
+            &mut self.state.assignment,
+            None,
+        ) {
+            error!("conflict arose during prepropagation");
+            return Verdict::EarlyRefutation;
+        }
+        debug!("prepropagation result ({})", self.state.assignment);
 
         let bar = if self.state.features.progress {
             ProgressBar::new(lemmas.len() as u64)
@@ -98,22 +123,22 @@ impl Validator for ForwardValidator {
                 RefLemma::Deletion(c_ref) => {
                     // TODO find out how to properly identify unit clauses and
                     // ignore their deletion
-                    if let Some(clause) = self.state.clause_db.get_clause(*c_ref) {
+                    if let Some(clause) = self.state.clause_db.get_clause(c_ref) {
                         if clause.is_unit(&self.state.assignment) {
                             debug!("is unit clause, skipping deletion ({})", clause);
                         } else {
                             trace!("delete ({})", clause);
-                            self.state.clause_db.del_clause(*c_ref);
+                            self.state.clause_db.del_clause(c_ref);
                         }
                     } else {
                         error!(
                             "tried delete but did not exist ({})",
-                            self.state.clause_db.get_any_clause(*c_ref)
+                            self.state.clause_db.get_any_clause(c_ref)
                         );
                     }
                 }
                 RefLemma::Addition(c_ref) => {
-                    let clause = self.state.clause_db.get_any_clause(*c_ref);
+                    let clause = self.state.clause_db.get_any_clause(c_ref);
                     debug!("checking ({})", clause);
 
                     // check if the lemma being added is redundant by first checking
@@ -146,7 +171,7 @@ impl Validator for ForwardValidator {
                             self.state.assignment.assign(unit);
                         }
 
-                        self.state.clause_db.activate_clause(*c_ref);
+                        self.state.clause_db.activate_clause(c_ref);
                     } else {
                         error!("lemma not redundant, proof refuted ({})", clause);
                         return Verdict::RefutationRefuted;
@@ -157,6 +182,7 @@ impl Validator for ForwardValidator {
                         &self.state.clause_db,
                         &mut self.state.watcher,
                         &mut self.state.assignment,
+                        None,
                     );
                     trace!("propagating to ({})", self.state.assignment);
                 }

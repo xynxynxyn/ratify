@@ -39,7 +39,7 @@ if __name__ == "__main__":
             print(f"    created certificate in {cert_time}s")
             drat_process, drat_time = time_cmd(["drat-trim", path, "cert.tmp"])
             ratify_process, ratify_time = time_cmd(
-                ["target/release/ratify", path, "cert.tmp"])
+                ["target/release/ratify", path, "cert.tmp", "-f", "-r"])
             if (ratify_process.returncode == 0
                     and drat_process.returncode == 0):
                 print("    refutation successfully validated")
