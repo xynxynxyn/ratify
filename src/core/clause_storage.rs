@@ -62,11 +62,6 @@ impl ClauseStorage {
             .expect("unknown clause ref")
     }
 
-    /// Deactivate all clauses.
-    pub fn clean(&mut self) {
-        self.active = vec![false; self.size()];
-    }
-
     pub fn add_clause(&mut self, clause: Clause, active: bool) -> ClauseRef {
         if let Some(c_ref) = self.mapping.get_by_left(&clause) {
             // clause exists already, fetch c_ref and update activity if needed

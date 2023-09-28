@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Display};
 
 use itertools::Itertools;
 
-use super::{Clause, Literal, Symbol};
+use super::{Clause, Literal};
 /// A collection of literals which should all be true. Mainly used to evaluate a
 /// clause.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -28,11 +28,6 @@ impl Assignment {
 
     pub fn has_literal(&self, lit: Literal) -> bool {
         self.0.contains(&lit)
-    }
-
-    /// Check if the given symbol exists in the assignment.
-    pub fn has_symbol(&self, sym: Symbol) -> bool {
-        self.0.iter().any(|lit| Symbol::from(*lit) == sym)
     }
 
     pub fn literals(&self) -> impl Iterator<Item = &Literal> {

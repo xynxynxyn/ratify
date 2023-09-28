@@ -121,20 +121,20 @@ impl Validator for ForwardValidator {
             // verify each lemma in order
             match lemma {
                 RefLemma::Deletion(c_ref) => {
-                    // TODO find out how to properly identify unit clauses and
-                    // ignore their deletion
-                    if let Some(clause) = self.state.clause_db.get_clause(c_ref) {
-                        if clause.is_unit(&self.state.assignment) {
-                            debug!("is unit clause, skipping deletion ({})", clause);
+                    if !self.state.features.skip_deletions {
+                        if let Some(clause) = self.state.clause_db.get_clause(c_ref) {
+                            if clause.is_unit(&self.state.assignment) {
+                                debug!("is unit clause, skipping deletion ({})", clause);
+                            } else {
+                                trace!("delete ({})", clause);
+                                self.state.clause_db.del_clause(c_ref);
+                            }
                         } else {
-                            trace!("delete ({})", clause);
-                            self.state.clause_db.del_clause(c_ref);
+                            error!(
+                                "tried delete but did not exist ({})",
+                                self.state.clause_db.get_any_clause(c_ref)
+                            );
                         }
-                    } else {
-                        error!(
-                            "tried delete but did not exist ({})",
-                            self.state.clause_db.get_any_clause(c_ref)
-                        );
                     }
                 }
                 RefLemma::Addition(c_ref) => {

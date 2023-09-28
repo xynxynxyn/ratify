@@ -32,6 +32,8 @@ pub struct Features {
     progress: bool,
     #[arg(short, long)]
     forward: bool,
+    #[arg(long)]
+    skip_deletions: bool,
     cnf: String,
     proof: String,
 }
