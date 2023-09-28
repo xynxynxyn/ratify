@@ -75,12 +75,13 @@ impl Validator for BackwardValidator {
             Some(e) => e,
             None => return Verdict::NoConflict,
         };
-        debug!("found empty clause");
+        info!("found empty clause");
         // mark the empty clause as core
         self.core_list.mark(empty_clause);
 
+        info!("preprocessing lemmas");
         let mut lemmas = self.preprocess(lemmas);
-        debug!("preprocessed lemmas");
+        info!("preprocessing complete");
 
         let progress = if self.state.features.progress {
             ProgressBar::new(lemmas.len() as u64)
@@ -95,9 +96,10 @@ impl Validator for BackwardValidator {
             // TODO the formula has to be modified here depending on whether a lemma is removed or
             // added in reverse
             match lemma {
-                RefLemma::Deletion(_c_ref) => {
-                    // do nothing
-                    ()
+                RefLemma::Deletion(c_ref) => {
+                    // activate the clause that got deactivated
+                    // this WILL break if the generated proof is faulty
+                    self.state.clause_db.activate_clause(c_ref);
                 }
                 RefLemma::Addition(c_ref) => {
                     if !self.core_list.is_core(c_ref) {
@@ -171,6 +173,12 @@ impl BackwardValidator {
             None,
         );
 
+        let progress = if self.state.features.progress {
+            ProgressBar::new(lemmas.len() as u64)
+        } else {
+            ProgressBar::hidden()
+        };
+
         // activate all clauses that have been added
         for lemma in lemmas {
             match lemma {
@@ -214,6 +222,7 @@ impl BackwardValidator {
                     None,
                 );
             }
+            progress.inc(1);
         }
 
         processed
