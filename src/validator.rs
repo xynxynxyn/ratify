@@ -102,7 +102,7 @@ fn propagate(
         if to_check.len() <= processed {
             // if there are no more literals left and no conflict has been
             // found return that there is no conflict
-            trace!("processed entire assignment, after: ({})", assignment);
+            trace!("processed entire assignment without conflict, after: ({})", assignment);
             return MaybeConflict::NoConflict;
         }
 
@@ -195,5 +195,45 @@ fn propagate(
                 }
             }
         }
+    }
+}
+
+// unit propagation tests
+#[cfg(test)]
+mod tests {
+    use crate::{
+        core::{clause, lit, Assignment, Clause, ClauseStorage, Literal},
+        validator::MaybeConflict,
+        watcher::Watcher,
+    };
+
+    use super::propagate;
+
+    fn setup(clauses: Vec<Clause>) -> (ClauseStorage, Watcher) {
+        let mut clause_db = ClauseStorage::with_capacity(clauses.len());
+        clause_db.add_from_iter(clauses.into_iter(), true);
+        let watcher = Watcher::new(&clause_db);
+        (clause_db, watcher)
+    }
+
+    fn test(clauses: Vec<Clause>, conflict: MaybeConflict, expected: Vec<Literal>) {
+        let (clause_db, watcher) = setup(clauses);
+        let mut assignment = Assignment::new();
+        assert_eq!(
+            conflict,
+            propagate(&clause_db, &watcher, &mut assignment, None),
+        );
+        for lit in expected {
+            assert!(assignment.has_literal(lit));
+        }
+    }
+
+    #[test]
+    fn simple_propagation() {
+        test(
+            vec![clause!(1), clause!(-1, 2)],
+            MaybeConflict::NoConflict,
+            vec![lit!(1), lit!(2)],
+        );
     }
 }

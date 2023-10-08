@@ -2,6 +2,15 @@ use itertools::Itertools;
 use std::{collections::BTreeSet, fmt::Display};
 
 use super::{Assignment, Literal};
+
+macro_rules! clause {
+    ($($e:expr),+ $(,)?) => {
+        crate::core::Clause::from_iter(vec![$($e),+].into_iter().map(|id| crate::core::Literal::from(id)))
+    };
+}
+
+pub(crate) use clause;
+
 /// A clause consists of a set of literals in disjunction.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Clause(BTreeSet<Literal>);

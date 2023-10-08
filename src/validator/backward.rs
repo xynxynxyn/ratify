@@ -83,6 +83,7 @@ impl Validator for BackwardValidator {
         let mut lemmas = self.preprocess(lemmas);
         info!("preprocessing complete");
 
+        info!("validating {} lemmas", lemmas.len());
         let progress = if self.state.features.progress {
             ProgressBar::new(lemmas.len() as u64)
         } else {
@@ -164,6 +165,19 @@ impl Validator for BackwardValidator {
 
 impl BackwardValidator {
     fn preprocess(&mut self, lemmas: Vec<RefLemma>) -> Vec<RefLemma> {
+        // propagation is only necessary if we actually delete stuff
+        if self.state.features.skip_deletions {
+            info!("skipping preprocessing and ignoring deletions");
+            let mut processed = vec![];
+            for l in lemmas {
+                if let lemma @ RefLemma::Addition(c_ref) = l {
+                    self.state.clause_db.activate_clause(c_ref);
+                    processed.push(lemma);
+                }
+            }
+            return processed;
+        }
+
         let mut processed = Vec::with_capacity(lemmas.len());
         // propagate initially
         propagate(
@@ -187,9 +201,6 @@ impl BackwardValidator {
                     processed.push(lemma);
                 }
                 lemma @ RefLemma::Deletion(c_ref) => {
-                    if self.state.features.skip_deletions {
-                        continue;
-                    }
                     // check if this is a unit deletion
                     if self.state.features.strict
                         || !self
@@ -212,16 +223,13 @@ impl BackwardValidator {
                 }
             }
 
-            // propagation is only necessary if we actually delete stuff
-            if !self.state.features.skip_deletions {
-                // propagate after each step
-                propagate(
-                    &self.state.clause_db,
-                    &self.state.watcher,
-                    &mut self.state.assignment,
-                    None,
-                );
-            }
+            // propagate after each step
+            propagate(
+                &self.state.clause_db,
+                &self.state.watcher,
+                &mut self.state.assignment,
+                None,
+            );
             progress.inc(1);
         }
 

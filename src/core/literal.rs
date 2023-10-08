@@ -1,5 +1,12 @@
 use std::{fmt::Display, ops::Not};
 
+macro_rules! lit {
+    ($id:expr) => {
+        crate::core::Literal::from($id)
+    };
+}
+pub(crate) use lit;
+
 /// The symbol of a literal. The value inside may never be negated or be zero.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct Symbol(i32);

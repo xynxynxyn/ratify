@@ -10,8 +10,8 @@ pub use clause_storage::*;
 pub use lemma::*;
 pub use literal::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum MaybeConflict {
     Conflict,
-    NoConflict
+    NoConflict,
 }
