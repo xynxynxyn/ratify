@@ -1,7 +1,8 @@
+use std::collections::BTreeSet;
+
 use super::{parse_clause, parse_i32};
-use crate::core::Clause;
+use crate::common::Literal;
 use anyhow::{anyhow, Result};
-use log::info;
 use nom::{
     bytes::complete::tag,
     character::complete::{multispace0, multispace1},
@@ -15,10 +16,8 @@ pub struct Header {
 }
 
 fn parse_header(input: &str) -> IResult<&str, Header> {
-    info!("input: {}", input);
     let (input, _) =
         tuple((multispace0, tag("p"), multispace1, tag("cnf"), multispace1)).parse(input)?;
-    info!("input: {}", input);
     let (input, (vars, _, clauses)) = tuple((parse_i32, multispace1, parse_i32)).parse(input)?;
     Ok((
         input,
@@ -29,13 +28,11 @@ fn parse_header(input: &str) -> IResult<&str, Header> {
     ))
 }
 
-pub fn parse(input: &str) -> Result<(Header, Vec<Clause>)> {
-    info!("parsing cnf");
+pub fn parse(input: &str) -> Result<(Header, Vec<BTreeSet<Literal>>)> {
     let mut lines = input.lines().filter(|s| !s.starts_with('c'));
     let header = {
         let (_, header) = parse_header(lines.next().ok_or(anyhow!("empty input"))?)
             .map_err(|_| anyhow!("invalid dimacs header"))?;
-        info!("{} variables and {} clauses", header.vars, header.clauses);
         header
     };
 

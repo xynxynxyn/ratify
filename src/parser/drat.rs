@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use log::info;
 use nom::{
     bytes::complete::tag,
     character::complete::{multispace0, multispace1},
@@ -9,9 +8,9 @@ use nom::{
 };
 
 use super::parse_clause;
-use crate::core::Lemma;
+use crate::common::RawLemma;
 
-fn parse_lemma(input: &str) -> IResult<&str, Lemma> {
+fn parse_lemma(input: &str) -> IResult<&str, RawLemma> {
     let (input, (del, clause)) = pair(
         opt(tuple((multispace0, tag("d"), multispace1))),
         parse_clause,
@@ -19,14 +18,13 @@ fn parse_lemma(input: &str) -> IResult<&str, Lemma> {
     .parse(input)?;
 
     if del.is_some() {
-        Ok((input, Lemma::Deletion(clause)))
+        Ok((input, RawLemma::Del(clause)))
     } else {
-        Ok((input, Lemma::Addition(clause)))
+        Ok((input, RawLemma::Add(clause)))
     }
 }
 
-pub fn parse(input: &str) -> Result<Vec<Lemma>> {
-    info!("parsing drat proof");
+pub fn parse(input: &str) -> Result<Vec<RawLemma>> {
     input
         .lines()
         .filter(|s| !s.starts_with('c'))
