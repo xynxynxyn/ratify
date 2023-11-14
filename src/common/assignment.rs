@@ -48,6 +48,13 @@ impl Assignment {
         }
     }
 
+    pub fn force_assign(&mut self, literal: Literal) {
+        match self.check(literal) {
+            Check::Assigned => (),
+            _ => self.literals.push(literal),
+        }
+    }
+
     pub fn is_true(&self, literal: Literal) -> bool {
         matches!(self.check(literal), Check::Assigned)
     }

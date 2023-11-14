@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::{
     common::{
-        storage::{ClauseStorage, View, Clause},
+        storage::{Clause, ClauseStorage, View},
         Assignment, Lemma,
     },
     propagator::Propagator,
@@ -27,8 +27,11 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
             Lemma::Add(clause) => {
                 if has_rup(&db_view, &mut propagator, &mut assignment, clause) {
                     db_view.add(clause);
-                    if matches!(clause_db.clause(clause).next(), None) {
+                    if clause_db.is_empty(clause) {
                         return Ok(());
+                    }
+                    if let Some(unit) = clause_db.extract_true_unit(clause) {
+                        assignment.force_assign(unit);
                     }
                     tracing::debug!("OK {:?}", clause_db.clause(clause).collect_vec());
                 } else {
@@ -42,8 +45,9 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
 
         progress.inc(1);
 
-        let _ = propagator.propagate_true_units(&db_view, &mut assignment);
-        let _ = propagator.propagate(&db_view, &mut assignment);
+        if let Err(_) = propagator.propagate(&db_view, &mut assignment) {
+            return Ok(());
+        }
         debug_assert!(propagator.sanity_check());
     }
 

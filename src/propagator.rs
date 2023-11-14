@@ -62,9 +62,8 @@ impl Propagator<'_> {
         for c in db_view.clauses() {
             // check if there exists is no second literal
             // this is thus a true unit
-            let mut literals = db_view.clause(c);
-            if let (Some(first), None) = (literals.next(), literals.next()) {
-                if let e @ Err(_) = assignment.try_assign(first) {
+            if let Some(unit) = self.clause_db.extract_true_unit(c) {
+                if let e @ Err(_) = assignment.try_assign(unit) {
                     assignment.rollback_to(rollback);
                     return e;
                 }
@@ -97,39 +96,47 @@ impl Propagator<'_> {
             let lit = assignment.nth_lit(processed);
             processed += 1;
 
+            if self.watchlist.get(&lit.abs()).is_none() {
+                continue;
+            }
+
             let mut fuse = false;
-            let mut relevant_clauses = self.take_watched_clauses(lit);
-            let new_watchlist = relevant_clauses
-                .drain()
-                .filter(|&clause| {
-                    let (fst, snd) = self.watched_by(clause).expect("watchlist not sane");
+            // unwrap is safe since we checked previously
+            // we use replace to not use an unnecessary deep copy
+            let mut relevant_clauses = std::mem::replace(
+                self.watchlist.get_mut(&lit.abs()).unwrap(),
+                FxHashSet::default(),
+            );
+            //let mut relevant_clauses = self.take_watched_clauses(lit);
+            // this could be optimized significantly with drain_filter()
+            // https://github.com/rust-lang/rust/issues/59618
+            // one would have to check the assembly to see if this does too many unnecessary
+            // allocations
+            relevant_clauses.retain(|&clause| {
+                let (fst, snd) = self.watched_by(clause).expect("watchlist not sane");
 
-                    if fuse
-                        || !db_view.is_active(clause)
-                        || assignment.is_true(fst)
-                        || assignment.is_true(snd)
-                    {
-                        // keep if nothing happened
-                        return true;
+                if fuse
+                    || !db_view.is_active(clause)
+                    || assignment.is_true(fst)
+                    || assignment.is_true(snd)
+                {
+                    // keep if nothing happened
+                    return true;
+                }
+                if let Some(new_unit) = self.update_watchlist(clause, lit, assignment) {
+                    if let e @ Err(_) = assignment.try_assign(new_unit) {
+                        result = e;
+                        fuse = true;
+                        assignment.rollback_to(rollback);
                     }
-                    if let Some(new_unit) = self.update_watchlist(clause, lit, assignment) {
-                        if let e @ Err(_) = assignment.try_assign(new_unit) {
-                            result = e;
-                            fuse = true;
-                            assignment.rollback_to(rollback);
-                        }
-                        // if we got a new unit that means the watchlist was not mutated
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .collect_vec();
+                    // if we got a new unit that means the watchlist was not mutated
+                    true
+                } else {
+                    false
+                }
+            });
 
-            self.watchlist
-                .entry(lit.abs())
-                .or_default()
-                .extend(new_watchlist);
+            *self.watchlist.get_mut(&lit).unwrap() = relevant_clauses;
         }
     }
 

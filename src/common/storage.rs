@@ -52,6 +52,7 @@ impl View<'_> {
 pub struct ClauseStorage {
     literals: Vec<Literal>,
     ranges: Vec<Range<usize>>,
+    max_literal: usize,
 }
 
 impl ClauseStorage {
@@ -76,6 +77,19 @@ impl ClauseStorage {
             .get(clause.index)
             .map(|range| (self.literals[range.start..range.end]).iter().cloned())
             .expect("clause index out of bounds")
+    }
+
+    pub fn extract_true_unit(&self, clause: Clause) -> Option<Literal> {
+        let range = &self.ranges[clause.index];
+        if range.end - range.start == 1 {
+            Some(self.literals[range.start])
+        } else {
+            None
+        }
+    }
+
+    pub fn is_empty(&self, clause: Clause) -> bool {
+        self.ranges[clause.index].is_empty()
     }
 
     pub fn all_clauses(&self) -> impl Iterator<Item = Clause> + '_ {
@@ -111,7 +125,15 @@ impl Builder {
         *self.clauses.get(&clause).expect("clause not known")
     }
 
-    pub fn finish(self) -> ClauseStorage {
+    pub fn finish(mut self) -> ClauseStorage {
+        self.clause_db.max_literal = self
+            .clause_db
+            .literals
+            .iter()
+            .max()
+            .expect("clause storage cannot be empty")
+            .raw()
+            .abs() as usize;
         self.clause_db
     }
 }
