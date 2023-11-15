@@ -107,11 +107,11 @@ impl Propagator<'_> {
 
                 let (fst, snd) = self.watched_by[clause];
 
-                if assignment.is_true(fst) || assignment.is_true(snd) {
+                let other = if fst == lit { snd } else { fst };
+
+                if assignment.is_true(other) {
                     continue;
                 }
-
-                let other = if fst == lit { snd } else { fst };
 
                 // one of the two literals must be falsified
                 // find out which one and replace it

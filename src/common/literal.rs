@@ -25,7 +25,7 @@ impl Neg for Literal {
 impl Default for Literal {
     fn default() -> Self {
         Literal {
-            inner: NonZeroI32::new(1).unwrap(),
+            inner: unsafe { NonZeroI32::new_unchecked(1) },
         }
     }
 }
@@ -33,7 +33,7 @@ impl Default for Literal {
 impl From<i32> for Literal {
     fn from(value: i32) -> Self {
         Literal {
-            inner: NonZeroI32::new(value).expect("cannot create literal with id 0"),
+            inner: unsafe { NonZeroI32::new_unchecked(value) },
         }
     }
 }

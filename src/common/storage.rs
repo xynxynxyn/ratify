@@ -19,9 +19,12 @@ impl<T> Index<Literal> for LiteralArray<T> {
     fn index(&self, index: Literal) -> &Self::Output {
         let index = index.raw();
         if index < 0 {
-            &self.inner[(index.abs() + self.max_literal) as usize]
+            unsafe {
+                self.inner
+                    .get_unchecked((-index + self.max_literal) as usize)
+            }
         } else {
-            &self.inner[index as usize]
+            unsafe { self.inner.get_unchecked(index as usize) }
         }
     }
 }
@@ -31,9 +34,12 @@ impl<T> IndexMut<Literal> for LiteralArray<T> {
     fn index_mut(&mut self, index: Literal) -> &mut Self::Output {
         let index = index.raw();
         if index < 0 {
-            &mut self.inner[(index.abs() + self.max_literal) as usize]
+            unsafe {
+                self.inner
+                    .get_unchecked_mut((-index + self.max_literal) as usize)
+            }
         } else {
-            &mut self.inner[index as usize]
+            unsafe { self.inner.get_unchecked_mut(index as usize) }
         }
     }
 }
@@ -75,13 +81,13 @@ pub struct ClauseArray<T> {
 impl<T> Index<Clause> for ClauseArray<T> {
     type Output = T;
     fn index(&self, c: Clause) -> &Self::Output {
-        &self.inner[c.index]
+        unsafe { self.inner.get_unchecked(c.index) }
     }
 }
 
 impl<T> IndexMut<Clause> for ClauseArray<T> {
     fn index_mut(&mut self, c: Clause) -> &mut Self::Output {
-        &mut self.inner[c.index]
+        unsafe { self.inner.get_unchecked_mut(c.index) }
     }
 }
 
