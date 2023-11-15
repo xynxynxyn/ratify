@@ -99,6 +99,9 @@ impl Propagator<'_> {
                 i += 1;
 
                 if !db_view.is_active(clause) {
+                    // lazily remove this clause
+                    relevant_clauses.swap_remove(i - 1);
+                    i -= 1;
                     continue;
                 }
 
@@ -145,9 +148,9 @@ fn find_next_unassigned<'a>(
 ) -> Option<Literal> {
     // TODO this could cause issues if the update function is called when one of the literals in
     // the assignment is already true
-    for &lit in literals {
-        if lit != except1 && lit != except2 && !assignment.is_true(-lit) {
-            return Some(lit);
+    for lit in literals {
+        if *lit != except1 && *lit != except2 && !assignment.is_true(-*lit) {
+            return Some(*lit);
         }
     }
     None

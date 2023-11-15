@@ -89,27 +89,28 @@ impl<T> IndexMut<Clause> for ClauseArray<T> {
 /// database.
 /// Generate a view from the database and then access the clauses through it.
 pub struct View<'a> {
-    active: Vec<bool>,
+    active: ClauseArray<bool>,
     db: &'a ClauseStorage,
 }
 
 impl View<'_> {
     pub fn del(&mut self, clause: Clause) {
-        self.active[clause.index] = false;
+        self.active[clause] = false;
     }
 
     pub fn add(&mut self, clause: Clause) {
-        self.active[clause.index] = true;
+        self.active[clause] = true;
     }
 
     pub fn is_active(&self, clause: Clause) -> bool {
-        unsafe { *self.active.get_unchecked(clause.index) }
+        self.active[clause]
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = Clause> + '_ {
         (0..self.db.number_of_clauses()).filter_map(|i| {
-            if self.active[i] {
-                Some(Clause { index: i })
+            let clause = Clause { index: i };
+            if self.active[clause] {
+                Some(clause)
             } else {
                 None
             }
@@ -188,8 +189,10 @@ impl ClauseStorage {
 
     /// Marks the first n clauses as active
     pub fn partial_view(&self, n: usize) -> View {
-        let mut active = vec![true; n];
-        active.extend_from_slice(&vec![false; self.ranges.len() - n]);
+        let mut active = self.clause_array();
+        for i in 0..n {
+            active[Clause { index: i }] = true;
+        }
         View { db: &self, active }
     }
 }
