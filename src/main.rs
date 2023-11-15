@@ -1,6 +1,5 @@
 mod common;
-mod forward_validate;
-mod propagator;
+mod forward;
 
 mod parser;
 
@@ -11,7 +10,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::{
     common::{storage, Lemma, RawLemma},
-    forward_validate::validate,
+    forward::validate,
 };
 
 #[derive(Parser, Debug)]
@@ -40,7 +39,7 @@ fn main() -> Result<()> {
     let (_, formula) = parser::cnf::parse(&std::fs::read_to_string(&flags.cnf)?)?;
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&flags.proof)?)?;
 
-    let mut db_builder = storage::Builder::default();
+    let mut db_builder = storage::Builder::new();
     let formula_clauses = formula.len();
     for c in formula {
         let _ = db_builder.add_clause(c);

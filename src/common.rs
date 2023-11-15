@@ -11,7 +11,7 @@ use self::storage::Clause;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Conflict {
-    caused_by: Literal,
+    _caused_by: Literal,
 }
 
 #[derive(Debug, Hash)]

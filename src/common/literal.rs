@@ -49,24 +49,56 @@ impl Display for Literal {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiteralMap<T> {
-    inner: Vec<T>,
+    pub(super) inner: Vec<T>,
+    pub(super) max_literal: i32,
 }
 
 impl<T> Index<Literal> for LiteralMap<T> {
     type Output = T;
+    #[inline]
     fn index(&self, index: Literal) -> &Self::Output {
-        let mut index = index.raw();
-        index = if index < 0 { index.abs() * 2 } else { index };
-        &self.inner[index as usize]
+        let index = index.raw();
+        if index < 0 {
+            &self.inner[(index.abs() + self.max_literal) as usize]
+        } else {
+            &self.inner[index as usize]
+        }
     }
 }
 
 impl<T> IndexMut<Literal> for LiteralMap<T> {
+    #[inline]
     fn index_mut(&mut self, index: Literal) -> &mut Self::Output {
-        let mut index = index.raw();
-        index = if index < 0 { index.abs() * 2 } else { index };
-        &mut self.inner[index as usize]
+        let index = index.raw();
+        if index < 0 {
+            &mut self.inner[(index.abs() + self.max_literal) as usize]
+        } else {
+            &mut self.inner[index as usize]
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LiteralSet {
+    pub(super) inner: LiteralMap<bool>,
+}
+
+impl LiteralSet {
+    pub fn insert(&mut self, lit: Literal) -> bool {
+        let already_present = self.contains(lit);
+        self.inner[lit] = true;
+        !already_present
+    }
+
+    pub fn contains(&self, lit: Literal) -> bool {
+        self.inner[lit]
+    }
+
+    pub fn remove(&mut self, lit: Literal) -> bool {
+        let already_present = self.contains(lit);
+        self.inner[lit] = false;
+        already_present
     }
 }

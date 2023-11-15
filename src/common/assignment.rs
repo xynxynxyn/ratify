@@ -1,8 +1,13 @@
-use super::{Conflict, Literal};
+use std::fmt::Display;
 
-#[derive(Debug, Default)]
+use itertools::Itertools;
+
+use super::{Conflict, Literal, LiteralSet};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
-    literals: Vec<Literal>,
+    pub(super) trace: Vec<Literal>,
+    pub(super) inner: LiteralSet,
 }
 
 #[derive(Debug)]
@@ -19,20 +24,17 @@ pub struct Rollback {
 
 impl Assignment {
     fn check(&self, literal: Literal) -> Check {
-        let neg_literal = -literal;
-        for &lit in &self.literals {
-            if lit == literal {
-                return Check::Assigned;
-            } else if lit == neg_literal {
-                return Check::Conflicts;
-            }
+        if self.inner.contains(-literal) {
+            Check::Conflicts
+        } else if self.inner.contains(literal) {
+            Check::Assigned
+        } else {
+            Check::Unassigned
         }
-
-        Check::Unassigned
     }
 
     pub fn nth_lit(&self, n: usize) -> Literal {
-        self.literals[n]
+        self.trace[n]
     }
 
     // assign a new literal
@@ -40,9 +42,12 @@ impl Assignment {
     pub fn try_assign(&mut self, literal: Literal) -> Result<(), Conflict> {
         match self.check(literal) {
             Check::Assigned => Ok(()),
-            Check::Conflicts => Err(Conflict { caused_by: literal }),
+            Check::Conflicts => Err(Conflict {
+                _caused_by: literal,
+            }),
             Check::Unassigned => {
-                self.literals.push(literal);
+                self.trace.push(literal);
+                self.inner.insert(literal);
                 Ok(())
             }
         }
@@ -51,7 +56,10 @@ impl Assignment {
     pub fn force_assign(&mut self, literal: Literal) {
         match self.check(literal) {
             Check::Assigned => (),
-            _ => self.literals.push(literal),
+            _ => {
+                self.trace.push(literal);
+                self.inner.insert(literal);
+            }
         }
     }
 
@@ -60,16 +68,71 @@ impl Assignment {
     }
 
     pub fn rollback_to(&mut self, rollback: Rollback) {
-        self.literals.truncate(rollback.len)
+        let cut = self.trace.split_off(rollback.len);
+        for lit in cut {
+            self.inner.remove(lit);
+        }
     }
 
     pub fn rollback_point(&self) -> Rollback {
         Rollback {
-            len: self.literals.len(),
+            len: self.trace.len(),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.literals.len()
+        self.trace.len()
+    }
+}
+
+impl Display for Assignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]",
+            self.trace.iter().map(|lit| lit.to_string()).join(",")
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::common::{assignment::Check, storage::Builder, Literal};
+
+    use super::Assignment;
+
+    fn init() -> Assignment {
+        let mut b = Builder::new();
+        b.add_clause(vec![-8].into_iter().map(|i| Literal::from(i)).collect());
+        let db = b.finish();
+        db.new_assignment()
+    }
+
+    #[test]
+    fn test() {
+        let mut ass = init();
+
+        for c in vec![1, 2, 3, -4, -5, 7, 8].into_iter().map(Literal::from) {
+            ass.force_assign(c)
+        }
+
+        assert!(ass.try_assign(Literal::from(-1)).is_err());
+        let reference = ass.clone();
+        let r = ass.rollback_point();
+
+        assert!(matches!(ass.check(Literal::from(-6)), Check::Unassigned));
+        assert!(matches!(ass.check(Literal::from(6)), Check::Unassigned));
+
+        assert!(matches!(ass.check(Literal::from(2)), Check::Assigned));
+        assert!(matches!(ass.check(Literal::from(-5)), Check::Assigned));
+
+        assert!(matches!(ass.check(Literal::from(-1)), Check::Conflicts));
+        assert!(matches!(ass.check(Literal::from(5)), Check::Conflicts));
+
+        assert!(ass.try_assign(Literal::from(6)).is_ok());
+        assert!(ass.try_assign(Literal::from(-6)).is_err());
+
+        ass.rollback_to(r);
+        assert_eq!(ass, reference);
     }
 }

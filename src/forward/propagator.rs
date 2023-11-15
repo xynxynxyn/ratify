@@ -1,3 +1,4 @@
+// TODO watchlist should be both for negative and positive literals instead of only one
 use fxhash::{FxHashMap, FxHashSet};
 
 use itertools::Itertools;
@@ -81,12 +82,10 @@ impl Propagator<'_> {
     ) -> Result<(), Conflict> {
         let rollback = assignment.rollback_point();
 
-        // create a copy of the literals that need to be checked
         let mut processed = 0;
         let mut result = Ok(());
 
         loop {
-            debug_assert!(self.sanity_check());
             // return the result once we have processed everything or a conflict has been
             // encountered
             if assignment.len() <= processed || result.is_err() {
@@ -96,6 +95,7 @@ impl Propagator<'_> {
             let lit = assignment.nth_lit(processed);
             processed += 1;
 
+            // if there's nothing to process for this literal go to the next
             if self.watchlist.get(&lit.abs()).is_none() {
                 continue;
             }
@@ -113,16 +113,17 @@ impl Propagator<'_> {
             // one would have to check the assembly to see if this does too many unnecessary
             // allocations
             relevant_clauses.retain(|&clause| {
-                let (fst, snd) = self.watched_by(clause).expect("watchlist not sane");
+                if fuse || !db_view.is_active(clause) {
+                    return true;
+                }
 
-                if fuse
-                    || !db_view.is_active(clause)
-                    || assignment.is_true(fst)
-                    || assignment.is_true(snd)
-                {
+                let (fst, snd) = self.watched_by[clause.index].unwrap();
+
+                if assignment.is_true(fst) || assignment.is_true(snd) {
                     // keep if nothing happened
                     return true;
                 }
+
                 if let Some(new_unit) = self.update_watchlist(clause, lit, assignment) {
                     if let e @ Err(_) = assignment.try_assign(new_unit) {
                         result = e;
@@ -136,13 +137,13 @@ impl Propagator<'_> {
                 }
             });
 
-            *self.watchlist.get_mut(&lit).unwrap() = relevant_clauses;
+            *self.watchlist.get_mut(&lit.abs()).unwrap() = relevant_clauses;
         }
     }
 
     pub fn sanity_check(&self) -> bool {
         for clause in self.clause_db.all_clauses() {
-            if let Some((fst, snd)) = self.watched_by(clause) {
+            if let Some((fst, snd)) = self.watched_by[clause.index] {
                 assert!(
                     self.watched_clauses(fst)
                         .expect("sanity check failed")
@@ -164,7 +165,7 @@ impl Propagator<'_> {
 
         for (&literal, clause_set) in &self.watchlist {
             for clause in clause_set {
-                let (fst, snd) = self.watched_by(*clause).expect("sanity check failed");
+                let (fst, snd) = self.watched_by[clause.index].expect("sanity check failed");
                 assert!(fst != snd && !fst.matches(snd));
                 assert!(fst.matches(literal) || snd.matches(literal));
             }
@@ -181,7 +182,7 @@ impl Propagator<'_> {
         to_replace: Literal,
         assignment: &Assignment,
     ) -> Option<Literal> {
-        if let Some((fst, snd)) = self.watched_by(clause) {
+        if let Some((fst, snd)) = self.watched_by[clause.index] {
             let other = if fst.matches(to_replace) {
                 snd
             } else if snd.matches(to_replace) {
@@ -205,18 +206,8 @@ impl Propagator<'_> {
         }
     }
 
-    fn take_watched_clauses(&mut self, literal: Literal) -> FxHashSet<Clause> {
-        self.watchlist
-            .remove(&literal.abs())
-            .unwrap_or(FxHashSet::default())
-    }
-
     fn watched_clauses(&self, literal: Literal) -> Option<&FxHashSet<Clause>> {
         self.watchlist.get(&literal.abs())
-    }
-
-    fn watched_by(&self, clause: Clause) -> Option<(Literal, Literal)> {
-        self.watched_by[clause.index]
     }
 
     fn watch(&mut self, literal: Literal, clause: Clause) {

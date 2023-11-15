@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, ops::Range};
 
 use fxhash::FxHashMap;
 
-use super::Literal;
+use super::{Assignment, Literal, LiteralMap};
 
 /// A clause identified by its index in a database
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -20,16 +20,19 @@ pub struct View<'a> {
 }
 
 impl View<'_> {
+    #[inline]
     pub fn del(&mut self, clause: Clause) {
         self.active[clause.index] = false;
     }
 
+    #[inline]
     pub fn add(&mut self, clause: Clause) {
         self.active[clause.index] = true;
     }
 
+    #[inline(always)]
     pub fn is_active(&self, clause: Clause) -> bool {
-        self.active[clause.index]
+        unsafe { *self.active.get_unchecked(clause.index) }
     }
 
     pub fn clauses(&self) -> impl Iterator<Item = Clause> + '_ {
@@ -42,20 +45,37 @@ impl View<'_> {
         })
     }
 
+    #[inline]
     pub fn clause(&self, clause: Clause) -> impl Iterator<Item = Literal> + '_ {
         self.db.clause(clause)
     }
 }
 
 /// The clause database stores all clauses that exist within the proof and formula.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ClauseStorage {
     literals: Vec<Literal>,
     ranges: Vec<Range<usize>>,
-    max_literal: usize,
+    max_literal: i32,
 }
 
 impl ClauseStorage {
+    pub fn new_assignment(&self) -> Assignment {
+        Assignment {
+            trace: vec![],
+            inner: super::LiteralSet {
+                inner: self.literal_map(),
+            },
+        }
+    }
+
+    pub fn literal_map<T: Default + Clone>(&self) -> LiteralMap<T> {
+        LiteralMap {
+            inner: vec![T::default(); (self.max_literal * 2 + 1) as usize],
+            max_literal: self.max_literal,
+        }
+    }
+
     // how many clauses are in the database?
     pub fn number_of_clauses(&self) -> usize {
         self.ranges.len()
@@ -104,13 +124,23 @@ impl ClauseStorage {
     }
 }
 
-#[derive(Default)]
 pub struct Builder {
     clauses: FxHashMap<BTreeSet<Literal>, Clause>,
     clause_db: ClauseStorage,
 }
 
 impl Builder {
+    pub fn new() -> Self {
+        Builder {
+            clauses: FxHashMap::default(),
+            clause_db: ClauseStorage {
+                literals: vec![],
+                ranges: vec![],
+                max_literal: 0,
+            },
+        }
+    }
+
     pub fn add_clause(&mut self, clause: BTreeSet<Literal>) -> Clause {
         if let Some(&c_ref) = self.clauses.get(&clause) {
             c_ref
@@ -130,10 +160,9 @@ impl Builder {
             .clause_db
             .literals
             .iter()
+            .map(|lit| lit.raw().abs())
             .max()
-            .expect("clause storage cannot be empty")
-            .raw()
-            .abs() as usize;
+            .expect("clause storage cannot be empty");
         self.clause_db
     }
 }
