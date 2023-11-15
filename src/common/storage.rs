@@ -116,7 +116,7 @@ impl View<'_> {
         })
     }
 
-    pub fn clause(&self, clause: Clause) -> impl Iterator<Item = Literal> + '_ {
+    pub fn clause(&self, clause: Clause) -> &[Literal] {
         self.db.clause(clause)
     }
 }
@@ -168,11 +168,9 @@ impl ClauseStorage {
     }
 
     /// Get the literals of a clause
-    pub fn clause(&self, clause: Clause) -> impl Iterator<Item = Literal> + '_ {
-        self.ranges
-            .get(clause.index)
-            .map(|range| (self.literals[range.start..range.end]).iter().cloned())
-            .expect("clause index out of bounds")
+    pub fn clause(&self, clause: Clause) -> &[Literal] {
+        let range = &self.ranges[clause.index];
+        &self.literals[range.start..range.end]
     }
 
     pub fn extract_true_unit(&self, clause: Clause) -> Option<Literal> {

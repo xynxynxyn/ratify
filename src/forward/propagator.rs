@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 use crate::common::{
     storage::{Clause, ClauseArray, ClauseStorage, LiteralArray, View},
     Assignment, Conflict, Literal,
@@ -35,11 +33,11 @@ impl<'a> Propagator<'a> {
 
 impl Propagator<'_> {
     pub fn add_clause(&mut self, clause: Clause) {
-        let mut lits = self.clause_db.clause(clause);
-        if let (Some(fst), Some(snd)) = (lits.next(), lits.next()) {
-            self.watchlist[fst].push(clause);
-            self.watchlist[snd].push(clause);
-            self.watched_by[clause] = (fst, snd);
+        let lits = self.clause_db.clause(clause);
+        if lits.len() >= 2 {
+            self.watchlist[lits[0]].push(clause);
+            self.watchlist[lits[1]].push(clause);
+            self.watched_by[clause] = (lits[0], lits[1]);
         }
     }
 
@@ -139,15 +137,18 @@ impl Propagator<'_> {
 }
 
 // Find a literal in the clause that is not falsified and not already watched.
-fn find_next_unassigned(
-    literals: impl Iterator<Item = Literal>,
+fn find_next_unassigned<'a>(
+    literals: &[Literal],
     assignment: &Assignment,
     except1: Literal,
     except2: Literal,
 ) -> Option<Literal> {
     // TODO this could cause issues if the update function is called when one of the literals in
     // the assignment is already true
-    literals
-        .filter(|&lit| lit != except1 && lit != except2 && !assignment.is_true(-lit))
-        .next()
+    for &lit in literals {
+        if lit != except1 && lit != except2 && !assignment.is_true(-lit) {
+            return Some(lit);
+        }
+    }
+    None
 }

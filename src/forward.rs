@@ -25,9 +25,6 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
                 db_view.del(clause);
             }
             Lemma::Add(clause) => {
-                if clause == (Clause { index: 461 }) {
-                    println!("check");
-                }
                 if has_rup(&db_view, &mut propagator, &mut assignment, clause) {
                     db_view.add(clause);
                     if clause_db.is_empty(clause) {
@@ -47,17 +44,21 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
                         "lemma ({}) does not have RUP ({:?})",
                         clause_db
                             .clause(clause)
+                            .into_iter()
                             .map(|lit| lit.to_string())
                             .join(","),
                         clause
                     ));
                 }
+
+                // propagate after a clause has been added
+                if !assignment.is_empty() {
+                    let _ = propagator.propagate(&db_view, &mut assignment);
+                }
             }
         }
 
         progress.inc(1);
-
-        let _ = propagator.propagate(&db_view, &mut assignment);
     }
 
     Err(anyhow!("no conflict detected"))
@@ -70,7 +71,7 @@ fn has_rup(
     lemma: Clause,
 ) -> bool {
     let rollback = assignment.rollback_point();
-    for lit in db_view.clause(lemma) {
+    for &lit in db_view.clause(lemma) {
         if let Err(_) = assignment.try_assign(-lit) {
             assignment.rollback_to(rollback);
             return true;

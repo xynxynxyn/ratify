@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use itertools::Itertools;
 
-use super::{Conflict, Literal, storage::LiteralSet};
+use super::{storage::LiteralSet, Conflict, Literal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
@@ -82,6 +82,10 @@ impl Assignment {
 
     pub fn len(&self) -> usize {
         self.trace.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.trace.is_empty()
     }
 }
 
