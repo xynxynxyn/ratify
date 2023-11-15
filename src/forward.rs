@@ -11,12 +11,11 @@ use crate::common::{
 use propagator::Propagator;
 
 pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>) -> Result<()> {
-    let mut propagator = Propagator::new(&clause_db);
+    let mut propagator = Propagator::new(&clause_db, &db_view);
     let mut assignment = clause_db.new_assignment();
     propagator
         .propagate_true_units(&db_view, &mut assignment)
         .map_err(|_| anyhow!("prepropagation conflict"))?;
-    debug_assert!(propagator.sanity_check());
     tracing::debug!("initial assignment: {}", assignment);
 
     let progress = ProgressBar::new(proof.len() as u64);
@@ -37,6 +36,10 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
                     if let Some(unit) = clause_db.extract_true_unit(clause) {
                         tracing::trace!("found unit in proof: {}", unit);
                         assignment.force_assign(unit);
+                    } else {
+                        // if we found a non unit clause (more than two literals) add it to the
+                        // propagator
+                        propagator.add_clause(clause);
                     }
                     tracing::debug!("OK ({:?})", clause);
                 } else {
@@ -55,7 +58,6 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
         progress.inc(1);
 
         let _ = propagator.propagate(&db_view, &mut assignment);
-        //debug_assert!(propagator.sanity_check());
     }
 
     Err(anyhow!("no conflict detected"))

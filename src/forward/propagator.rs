@@ -1,55 +1,46 @@
-// TODO watchlist should be both for negative and positive literals instead of only one
-use fxhash::{FxHashMap, FxHashSet};
-
-use itertools::Itertools;
-
 use crate::common::{
-    storage::{Clause, ClauseStorage, View},
+    storage::{Clause, ClauseArray, ClauseStorage, LiteralArray, View},
     Assignment, Conflict, Literal,
 };
 
 pub struct Propagator<'a> {
-    // TODO if we do not care about memory the hashset here could be replaced with a bitvector
-    // though this might be very expensive. run benchmarks for this.
-    // If the maximum value of a literal is known we can also use an array for this instead of a
-    // hashset
     /// Mapping from literal to a set of clauses. These are the clauses watched by the specified
     /// literal.
-    watchlist: FxHashMap<Literal, FxHashSet<Clause>>,
+    watchlist: LiteralArray<Vec<Clause>>,
     /// Vec that contains the actual literal instance of the clause being watched.
-    watched_by: Vec<Option<(Literal, Literal)>>,
+    watched_by: ClauseArray<(Literal, Literal)>,
     /// Reference to the underlying clause database to get information about the clauses.
     clause_db: &'a ClauseStorage,
 }
 
 impl<'a> Propagator<'a> {
     /// Create a new propagator from the clauses in a database.
-    pub fn new(clause_db: &'a ClauseStorage) -> Self {
+    pub fn new(clause_db: &'a ClauseStorage, view: &View) -> Self {
         // This goes through all the clauses in the database. If the clause has at least two
         // literals, the first two are registered in the watchlist. Otherwise, None is stored
         // instead, indicating that this is either a unit or empty clause.
         let mut propagator = Propagator {
-            watchlist: FxHashMap::default(),
-            watched_by: (0..clause_db.number_of_clauses())
-                .map(|_| None)
-                .collect_vec(),
+            watchlist: clause_db.literal_array(),
+            watched_by: clause_db.clause_array(),
             clause_db,
         };
 
-        clause_db.all_clauses().for_each(|c| {
-            let mut lits = clause_db.clause(c);
-            if let (Some(fst), Some(snd)) = (lits.next(), lits.next()) {
-                propagator.watch(fst, c);
-                propagator.watch(snd, c);
-                propagator.watched_by[c.index] = Some((fst, snd));
-            }
-        });
+        view.clauses().for_each(|c| propagator.add_clause(c));
 
         propagator
     }
 }
 
 impl Propagator<'_> {
+    pub fn add_clause(&mut self, clause: Clause) {
+        let mut lits = self.clause_db.clause(clause);
+        if let (Some(fst), Some(snd)) = (lits.next(), lits.next()) {
+            self.watchlist[fst].push(clause);
+            self.watchlist[snd].push(clause);
+            self.watched_by[clause] = (fst, snd);
+        }
+    }
+
     /// Scan the currently active clauses for true units (clauses only containing a single
     /// literal). Update the assignment accordingly. If a conflict is encountered an error is
     /// returned with the literal that caused the conflict.
@@ -89,137 +80,51 @@ impl Propagator<'_> {
             // return the result once we have processed everything or a conflict has been
             // encountered
             if assignment.len() <= processed || result.is_err() {
+                if result.is_ok() {
+                    tracing::debug!("no conflict found, final assignment: [{}]", assignment)
+                }
                 return result;
             }
 
-            let lit = assignment.nth_lit(processed);
+            let lit = -assignment.nth_lit(processed);
             processed += 1;
 
-            // if there's nothing to process for this literal go to the next
-            if self.watchlist.get(&lit.abs()).is_none() {
-                continue;
-            }
-
+            let mut relevant_clauses = std::mem::replace(&mut self.watchlist[lit], vec![]);
             let mut fuse = false;
-            // unwrap is safe since we checked previously
-            // we use replace to not use an unnecessary deep copy
-            let mut relevant_clauses = std::mem::replace(
-                self.watchlist.get_mut(&lit.abs()).unwrap(),
-                FxHashSet::default(),
-            );
-            //let mut relevant_clauses = self.take_watched_clauses(lit);
-            // this could be optimized significantly with drain_filter()
-            // https://github.com/rust-lang/rust/issues/59618
-            // one would have to check the assembly to see if this does too many unnecessary
-            // allocations
             relevant_clauses.retain(|&clause| {
                 if fuse || !db_view.is_active(clause) {
                     return true;
                 }
 
-                let (fst, snd) = self.watched_by[clause.index].unwrap();
+                let (fst, snd) = self.watched_by[clause];
 
                 if assignment.is_true(fst) || assignment.is_true(snd) {
-                    // keep if nothing happened
                     return true;
                 }
 
-                if let Some(new_unit) = self.update_watchlist(clause, lit, assignment) {
-                    if let e @ Err(_) = assignment.try_assign(new_unit) {
+                // one of the two literals must be falsified
+                // find out which one and replace it
+                if let Some(next_unassigned) =
+                    find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
+                {
+                    self.watchlist[next_unassigned].push(clause);
+                    let other = if fst == lit { snd } else { fst };
+                    self.watched_by[clause] = (next_unassigned, other);
+                    false
+                } else {
+                    // Since we did not find another unassigned literal the other watched one must
+                    // be a new unit
+                    let unit = if fst == lit { snd } else { fst };
+                    if let e @ Err(_) = assignment.try_assign(unit) {
+                        // the unit lead to a conflict
                         result = e;
                         fuse = true;
                         assignment.rollback_to(rollback);
                     }
-                    // if we got a new unit that means the watchlist was not mutated
                     true
-                } else {
-                    false
                 }
             });
-
-            *self.watchlist.get_mut(&lit.abs()).unwrap() = relevant_clauses;
-        }
-    }
-
-    pub fn sanity_check(&self) -> bool {
-        for clause in self.clause_db.all_clauses() {
-            if let Some((fst, snd)) = self.watched_by[clause.index] {
-                assert!(
-                    self.watched_clauses(fst)
-                        .expect("sanity check failed")
-                        .contains(&clause),
-                    "watchlist for {:?} does not contain {:?}",
-                    fst,
-                    clause
-                );
-                assert!(
-                    self.watched_clauses(snd)
-                        .expect("sanity check failed")
-                        .contains(&clause),
-                    "watchlist for {:?} does not contain {:?}",
-                    snd,
-                    clause
-                );
-            }
-        }
-
-        for (&literal, clause_set) in &self.watchlist {
-            for clause in clause_set {
-                let (fst, snd) = self.watched_by[clause.index].expect("sanity check failed");
-                assert!(fst != snd && !fst.matches(snd));
-                assert!(fst.matches(literal) || snd.matches(literal));
-            }
-        }
-        true
-    }
-
-    /// Takes a clause, literal and assignment. The function will try to find a new unassigned
-    /// literal to watch instead of the given one.
-    /// If there is no other literal available the function returns a new unit.
-    fn update_watchlist(
-        &mut self,
-        clause: Clause,
-        to_replace: Literal,
-        assignment: &Assignment,
-    ) -> Option<Literal> {
-        if let Some((fst, snd)) = self.watched_by[clause.index] {
-            let other = if fst.matches(to_replace) {
-                snd
-            } else if snd.matches(to_replace) {
-                fst
-            } else {
-                panic!("called with wrong literal to replace")
-            };
-            if let Some(replacement) =
-                find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
-            {
-                // found a new replacement
-                self.unwatch(to_replace, clause);
-                self.watch(replacement, clause);
-                self.watched_by[clause.index] = Some((other, replacement));
-                None
-            } else {
-                Some(other)
-            }
-        } else {
-            unreachable!("clause in question was not watched by any literal")
-        }
-    }
-
-    fn watched_clauses(&self, literal: Literal) -> Option<&FxHashSet<Clause>> {
-        self.watchlist.get(&literal.abs())
-    }
-
-    fn watch(&mut self, literal: Literal, clause: Clause) {
-        self.watchlist
-            .entry(literal.abs())
-            .or_default()
-            .insert(clause);
-    }
-
-    fn unwatch(&mut self, literal: Literal, clause: Clause) {
-        if let Some(set) = self.watchlist.get_mut(&literal.abs()) {
-            set.remove(&clause);
+            self.watchlist[lit] = relevant_clauses;
         }
     }
 }

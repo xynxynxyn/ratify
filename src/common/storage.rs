@@ -1,14 +1,88 @@
-use std::{collections::BTreeSet, ops::Range};
+use std::{
+    collections::BTreeSet,
+    ops::{Index, IndexMut, Range},
+};
 
 use fxhash::FxHashMap;
 
-use super::{Assignment, Literal, LiteralMap};
+use super::{Assignment, Literal};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralArray<T> {
+    inner: Vec<T>,
+    max_literal: i32,
+}
+
+impl<T> Index<Literal> for LiteralArray<T> {
+    type Output = T;
+    #[inline]
+    fn index(&self, index: Literal) -> &Self::Output {
+        let index = index.raw();
+        if index < 0 {
+            &self.inner[(index.abs() + self.max_literal) as usize]
+        } else {
+            &self.inner[index as usize]
+        }
+    }
+}
+
+impl<T> IndexMut<Literal> for LiteralArray<T> {
+    #[inline]
+    fn index_mut(&mut self, index: Literal) -> &mut Self::Output {
+        let index = index.raw();
+        if index < 0 {
+            &mut self.inner[(index.abs() + self.max_literal) as usize]
+        } else {
+            &mut self.inner[index as usize]
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LiteralSet {
+    pub(super) inner: LiteralArray<bool>,
+}
+
+impl LiteralSet {
+    pub fn insert(&mut self, lit: Literal) -> bool {
+        let already_present = self.contains(lit);
+        self.inner[lit] = true;
+        !already_present
+    }
+
+    pub fn contains(&self, lit: Literal) -> bool {
+        self.inner[lit]
+    }
+
+    pub fn remove(&mut self, lit: Literal) -> bool {
+        let already_present = self.contains(lit);
+        self.inner[lit] = false;
+        already_present
+    }
+}
 
 /// A clause identified by its index in a database
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct Clause {
     // TODO this should not be public, create a custom array struct instead that is used to index
     pub index: usize,
+}
+
+pub struct ClauseArray<T> {
+    inner: Vec<T>,
+}
+
+impl<T> Index<Clause> for ClauseArray<T> {
+    type Output = T;
+    fn index(&self, c: Clause) -> &Self::Output {
+        &self.inner[c.index]
+    }
+}
+
+impl<T> IndexMut<Clause> for ClauseArray<T> {
+    fn index_mut(&mut self, c: Clause) -> &mut Self::Output {
+        &mut self.inner[c.index]
+    }
 }
 
 /// Keeps track of the clauses which are currently active and has a reference to the underlying
@@ -20,17 +94,14 @@ pub struct View<'a> {
 }
 
 impl View<'_> {
-    #[inline]
     pub fn del(&mut self, clause: Clause) {
         self.active[clause.index] = false;
     }
 
-    #[inline]
     pub fn add(&mut self, clause: Clause) {
         self.active[clause.index] = true;
     }
 
-    #[inline(always)]
     pub fn is_active(&self, clause: Clause) -> bool {
         unsafe { *self.active.get_unchecked(clause.index) }
     }
@@ -45,7 +116,6 @@ impl View<'_> {
         })
     }
 
-    #[inline]
     pub fn clause(&self, clause: Clause) -> impl Iterator<Item = Literal> + '_ {
         self.db.clause(clause)
     }
@@ -63,16 +133,22 @@ impl ClauseStorage {
     pub fn new_assignment(&self) -> Assignment {
         Assignment {
             trace: vec![],
-            inner: super::LiteralSet {
-                inner: self.literal_map(),
+            inner: LiteralSet {
+                inner: self.literal_array(),
             },
         }
     }
 
-    pub fn literal_map<T: Default + Clone>(&self) -> LiteralMap<T> {
-        LiteralMap {
+    pub fn literal_array<T: Default + Clone>(&self) -> LiteralArray<T> {
+        LiteralArray {
             inner: vec![T::default(); (self.max_literal * 2 + 1) as usize],
             max_literal: self.max_literal,
+        }
+    }
+
+    pub fn clause_array<T: Default + Clone>(&self) -> ClauseArray<T> {
+        ClauseArray {
+            inner: vec![T::default(); self.number_of_clauses()],
         }
     }
 
@@ -112,11 +188,7 @@ impl ClauseStorage {
         self.ranges[clause.index].is_empty()
     }
 
-    pub fn all_clauses(&self) -> impl Iterator<Item = Clause> + '_ {
-        (0..self.number_of_clauses()).map(|i| Clause { index: i })
-    }
-
-    // marks the first n clauses as active
+    /// Marks the first n clauses as active
     pub fn partial_view(&self, n: usize) -> View {
         let mut active = vec![true; n];
         active.extend_from_slice(&vec![false; self.ranges.len() - n]);

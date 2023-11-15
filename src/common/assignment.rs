@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use itertools::Itertools;
 
-use super::{Conflict, Literal, LiteralSet};
+use super::{Conflict, Literal, storage::LiteralSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {

@@ -12,7 +12,6 @@ anyhow = "1.0"
 thiserror = "1.0"
 nom = "7"
 itertools = "0.11.0"
-bimap = "0.6.3"
 indicatif = "0.17.6"
 clap = { version = "4.4.2", features = ["derive"] }
 fxhash = "0.2.1"
