@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::common::{
     storage::{Clause, ClauseArray, ClauseStorage, LiteralArray, View},
     Assignment, Conflict, Literal,
@@ -89,18 +91,26 @@ impl Propagator<'_> {
             let lit = -assignment.nth_lit(processed);
             processed += 1;
 
-            let mut relevant_clauses = std::mem::replace(&mut self.watchlist[lit], vec![]);
-            let mut fuse = false;
-            relevant_clauses.retain(|&clause| {
-                if fuse || !db_view.is_active(clause) {
-                    return true;
+            let mut relevant_clauses =
+                std::mem::replace(&mut self.watchlist[lit], Vec::with_capacity(0));
+
+            let mut i = 0;
+
+            while i < relevant_clauses.len() {
+                let clause = relevant_clauses[i];
+                i += 1;
+
+                if !db_view.is_active(clause) {
+                    continue;
                 }
 
                 let (fst, snd) = self.watched_by[clause];
 
                 if assignment.is_true(fst) || assignment.is_true(snd) {
-                    return true;
+                    continue;
                 }
+
+                let other = if fst == lit { snd } else { fst };
 
                 // one of the two literals must be falsified
                 // find out which one and replace it
@@ -108,22 +118,21 @@ impl Propagator<'_> {
                     find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
                 {
                     self.watchlist[next_unassigned].push(clause);
-                    let other = if fst == lit { snd } else { fst };
                     self.watched_by[clause] = (next_unassigned, other);
-                    false
+                    relevant_clauses.swap_remove(i - 1);
+                    i -= 1;
                 } else {
                     // Since we did not find another unassigned literal the other watched one must
                     // be a new unit
-                    let unit = if fst == lit { snd } else { fst };
-                    if let e @ Err(_) = assignment.try_assign(unit) {
+                    if let e @ Err(_) = assignment.try_assign(other) {
                         // the unit lead to a conflict
                         result = e;
-                        fuse = true;
                         assignment.rollback_to(rollback);
+                        break;
                     }
-                    true
                 }
-            });
+            }
+
             self.watchlist[lit] = relevant_clauses;
         }
     }
