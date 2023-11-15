@@ -70,8 +70,7 @@ impl LiteralSet {
 /// A clause identified by its index in a database
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct Clause {
-    // TODO this should not be public, create a custom array struct instead that is used to index
-    pub index: usize,
+    index: usize,
 }
 
 pub struct ClauseArray<T> {
@@ -177,7 +176,9 @@ impl ClauseStorage {
     /// Get the literals of a clause
     pub fn clause(&self, clause: Clause) -> &[Literal] {
         let range = &self.ranges[clause.index];
-        &self.literals[range.start..range.end]
+        unsafe {
+            self.literals.get_unchecked(range.start..range.end)
+        }
     }
 
     pub fn extract_true_unit(&self, clause: Clause) -> Option<Literal> {
