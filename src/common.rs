@@ -9,10 +9,8 @@ pub use literal::*;
 
 use self::storage::Clause;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Conflict {
-    _caused_by: Literal,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Conflict {}
 
 #[derive(Debug, Hash)]
 pub enum RawLemma {

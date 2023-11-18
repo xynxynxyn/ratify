@@ -56,7 +56,7 @@ impl Propagator<'_> {
             // this is thus a true unit
             if let Some(unit) = self.clause_db.extract_true_unit(c) {
                 if let e @ Err(_) = assignment.try_assign(unit) {
-                    assignment.rollback_to(rollback);
+                    assignment.rollback(rollback);
                     return e;
                 }
             }
@@ -79,16 +79,16 @@ impl Propagator<'_> {
         loop {
             // return the result once we have processed everything or a conflict has been
             // encountered
-            if assignment.len() <= processed || result.is_err() {
-                if result.is_ok() {
-                    tracing::debug!("no conflict found, final assignment: [{}]", assignment)
-                }
+            if assignment.trace_len() <= processed {
                 return result;
             }
 
             let lit = -assignment.nth_lit(processed);
             processed += 1;
 
+            // TODO try out std::vec::Vec::extract_if
+            // maybe use std::mem::swap twice with a preallocated vec?
+            // have to check whether this actually improves anything
             let mut relevant_clauses =
                 std::mem::replace(&mut self.watchlist[lit], Vec::with_capacity(0));
 
@@ -116,7 +116,8 @@ impl Propagator<'_> {
                 // one of the two literals must be falsified
                 // find out which one and replace it
                 if let Some(next_unassigned) =
-                    find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
+                    assignment.find_next_true_or_unassigned(self.clause_db.clause(clause), fst, snd)
+                    // find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
                 {
                     self.watchlist[next_unassigned].push(clause);
                     self.watched_by[clause] = (next_unassigned, other);
@@ -128,7 +129,7 @@ impl Propagator<'_> {
                     if let e @ Err(_) = assignment.try_assign(other) {
                         // the unit lead to a conflict
                         result = e;
-                        assignment.rollback_to(rollback);
+                        assignment.rollback(rollback);
                         break;
                     }
                 }
@@ -137,21 +138,4 @@ impl Propagator<'_> {
             self.watchlist[lit] = relevant_clauses;
         }
     }
-}
-
-// Find a literal in the clause that is not falsified and not already watched.
-fn find_next_unassigned<'a>(
-    literals: &[Literal],
-    assignment: &Assignment,
-    except1: Literal,
-    except2: Literal,
-) -> Option<Literal> {
-    // TODO this could cause issues if the update function is called when one of the literals in
-    // the assignment is already true
-    for lit in literals {
-        if *lit != except1 && *lit != except2 && !assignment.is_true(-*lit) {
-            return Some(*lit);
-        }
-    }
-    None
 }

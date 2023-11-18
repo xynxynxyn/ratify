@@ -5,7 +5,7 @@ use std::{
 
 use fxhash::FxHashMap;
 
-use super::{Assignment, Literal};
+use super::Literal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiteralArray<T> {
@@ -15,7 +15,6 @@ pub struct LiteralArray<T> {
 
 impl<T> Index<Literal> for LiteralArray<T> {
     type Output = T;
-    #[inline]
     fn index(&self, index: Literal) -> &Self::Output {
         let index = index.raw();
         if index < 0 {
@@ -30,7 +29,6 @@ impl<T> Index<Literal> for LiteralArray<T> {
 }
 
 impl<T> IndexMut<Literal> for LiteralArray<T> {
-    #[inline]
     fn index_mut(&mut self, index: Literal) -> &mut Self::Output {
         let index = index.raw();
         if index < 0 {
@@ -136,15 +134,6 @@ pub struct ClauseStorage {
 }
 
 impl ClauseStorage {
-    pub fn new_assignment(&self) -> Assignment {
-        Assignment {
-            trace: vec![],
-            inner: LiteralSet {
-                inner: self.literal_array(),
-            },
-        }
-    }
-
     pub fn literal_array<T: Default + Clone>(&self) -> LiteralArray<T> {
         LiteralArray {
             inner: vec![T::default(); (self.max_literal * 2 + 1) as usize],
@@ -176,9 +165,7 @@ impl ClauseStorage {
     /// Get the literals of a clause
     pub fn clause(&self, clause: Clause) -> &[Literal] {
         let range = &self.ranges[clause.index];
-        unsafe {
-            self.literals.get_unchecked(range.start..range.end)
-        }
+        unsafe { self.literals.get_unchecked(range.start..range.end) }
     }
 
     pub fn extract_true_unit(&self, clause: Clause) -> Option<Literal> {

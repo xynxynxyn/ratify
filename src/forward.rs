@@ -12,11 +12,10 @@ use propagator::Propagator;
 
 pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>) -> Result<()> {
     let mut propagator = Propagator::new(&clause_db, &db_view);
-    let mut assignment = clause_db.new_assignment();
+    let mut assignment = Assignment::new(clause_db);
     propagator
         .propagate_true_units(&db_view, &mut assignment)
         .map_err(|_| anyhow!("prepropagation conflict"))?;
-    tracing::debug!("initial assignment: {}", assignment);
 
     let progress = ProgressBar::new(proof.len() as u64);
     for lemma in proof {
@@ -32,7 +31,10 @@ pub fn validate(clause_db: &ClauseStorage, mut db_view: View, proof: Vec<Lemma>)
                     }
                     if let Some(unit) = clause_db.extract_true_unit(clause) {
                         tracing::trace!("found unit in proof: {}", unit);
-                        assignment.force_assign(unit);
+                        if let Err(_) = assignment.try_assign(unit) {
+                            // found an early conflict
+                            return Err(anyhow!("early conflict detected on literal {}", unit));
+                        }
                     } else {
                         // if we found a non unit clause (more than two literals) add it to the
                         // propagator
@@ -73,12 +75,12 @@ fn has_rup(
     let rollback = assignment.rollback_point();
     for &lit in db_view.clause(lemma) {
         if let Err(_) = assignment.try_assign(-lit) {
-            assignment.rollback_to(rollback);
+            assignment.rollback(rollback);
             return true;
         }
     }
 
     let res = propagator.propagate(db_view, assignment);
-    assignment.rollback_to(rollback);
+    assignment.rollback(rollback);
     res.is_err()
 }

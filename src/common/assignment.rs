@@ -1,76 +1,55 @@
-use std::fmt::Display;
-
-use itertools::Itertools;
-
-use super::{storage::LiteralSet, Conflict, Literal};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Assignment {
-    pub(super) trace: Vec<Literal>,
-    pub(super) inner: LiteralSet,
-}
-
-#[derive(Debug)]
-enum Check {
-    Assigned,
-    Conflicts,
-    Unassigned,
-}
+use super::{
+    storage::{ClauseStorage, LiteralSet},
+    Conflict, Literal,
+};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Rollback {
     len: usize,
 }
 
+pub struct Assignment {
+    inner: LiteralSet,
+    trace: Vec<Literal>,
+}
+
 impl Assignment {
-    fn check(&self, literal: Literal) -> Check {
-        if self.inner.contains(-literal) {
-            Check::Conflicts
-        } else if self.inner.contains(literal) {
-            Check::Assigned
-        } else {
-            Check::Unassigned
+    /// Create a new assignment from a clause storage
+    pub fn new(clause_db: &ClauseStorage) -> Self {
+        Assignment {
+            inner: LiteralSet {
+                inner: clause_db.literal_array(),
+            },
+            trace: vec![],
         }
     }
 
-    pub fn nth_lit(&self, n: usize) -> Literal {
-        self.trace[n]
+    /// Find the next literal out of a list of literals which is either unassigned or true.
+    pub fn find_next_true_or_unassigned(
+        &self,
+        literals: &[Literal],
+        except1: Literal,
+        except2: Literal,
+    ) -> Option<Literal> {
+        literals
+            .iter()
+            .filter(|&&lit| lit != except1 && lit != except2 && !self.inner.contains(-lit))
+            .next()
+            .copied()
     }
 
-    // assign a new literal
-    // this may be slow since checking if it already exists is O(n) instead of O(1)
+    /// Try adding the literal to the assignment. If it is already assigned nothing happens. If it
+    /// is falsified an error with a conflict is returned.
     pub fn try_assign(&mut self, literal: Literal) -> Result<(), Conflict> {
-        match self.check(literal) {
-            Check::Assigned => Ok(()),
-            Check::Conflicts => Err(Conflict {
-                _caused_by: literal,
-            }),
-            Check::Unassigned => {
-                self.trace.push(literal);
-                self.inner.insert(literal);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn force_assign(&mut self, literal: Literal) {
-        match self.check(literal) {
-            Check::Assigned => (),
-            _ => {
-                self.trace.push(literal);
-                self.inner.insert(literal);
-            }
-        }
-    }
-
-    pub fn is_true(&self, literal: Literal) -> bool {
-        matches!(self.check(literal), Check::Assigned)
-    }
-
-    pub fn rollback_to(&mut self, rollback: Rollback) {
-        let cut = self.trace.split_off(rollback.len);
-        for lit in cut {
-            self.inner.remove(lit);
+        // check if the negation is assigned
+        if self.inner.contains(-literal) {
+            Err(Conflict {})
+        } else if self.inner.contains(literal) {
+            Ok(())
+        } else {
+            self.inner.insert(literal);
+            self.trace.push(literal);
+            Ok(())
         }
     }
 
@@ -80,63 +59,26 @@ impl Assignment {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.trace.len()
+    pub fn is_true(&self, literal: Literal) -> bool {
+        self.inner.contains(literal)
+    }
+
+    pub fn rollback(&mut self, rollback_point: Rollback) {
+        let cut = self.trace.split_off(rollback_point.len);
+        for lit in cut {
+            self.inner.remove(lit);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
         self.trace.is_empty()
     }
-}
 
-impl Display for Assignment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "[{}]",
-            self.trace.iter().map(|lit| lit.to_string()).join(",")
-        )
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::common::{assignment::Check, storage::Builder, Literal};
-
-    use super::Assignment;
-
-    fn init() -> Assignment {
-        let mut b = Builder::new();
-        b.add_clause(vec![-8].into_iter().map(|i| Literal::from(i)).collect());
-        let db = b.finish();
-        db.new_assignment()
+    pub fn trace_len(&self) -> usize {
+        self.trace.len()
     }
 
-    #[test]
-    fn test() {
-        let mut ass = init();
-
-        for c in vec![1, 2, 3, -4, -5, 7, 8].into_iter().map(Literal::from) {
-            ass.force_assign(c)
-        }
-
-        assert!(ass.try_assign(Literal::from(-1)).is_err());
-        let reference = ass.clone();
-        let r = ass.rollback_point();
-
-        assert!(matches!(ass.check(Literal::from(-6)), Check::Unassigned));
-        assert!(matches!(ass.check(Literal::from(6)), Check::Unassigned));
-
-        assert!(matches!(ass.check(Literal::from(2)), Check::Assigned));
-        assert!(matches!(ass.check(Literal::from(-5)), Check::Assigned));
-
-        assert!(matches!(ass.check(Literal::from(-1)), Check::Conflicts));
-        assert!(matches!(ass.check(Literal::from(5)), Check::Conflicts));
-
-        assert!(ass.try_assign(Literal::from(6)).is_ok());
-        assert!(ass.try_assign(Literal::from(-6)).is_err());
-
-        ass.rollback_to(r);
-        assert_eq!(ass, reference);
+    pub fn nth_lit(&self, n: usize) -> Literal {
+        self.trace[n]
     }
 }
