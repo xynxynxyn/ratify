@@ -74,15 +74,10 @@ impl Propagator<'_> {
         let rollback = assignment.rollback_point();
 
         let mut processed = 0;
-        let mut result = Ok(());
 
-        loop {
+        while processed < assignment.trace_len() {
             // return the result once we have processed everything or a conflict has been
             // encountered
-            if assignment.trace_len() <= processed {
-                return result;
-            }
-
             let lit = -assignment.nth_lit(processed);
             processed += 1;
 
@@ -116,8 +111,7 @@ impl Propagator<'_> {
                 // one of the two literals must be falsified
                 // find out which one and replace it
                 if let Some(next_unassigned) =
-                    assignment.find_next_true_or_unassigned(self.clause_db.clause(clause), fst, snd)
-                    // find_next_unassigned(self.clause_db.clause(clause), assignment, fst, snd)
+                    assignment.find_next_true_or_unassigned(self.clause_db.clause(clause), other)
                 {
                     self.watchlist[next_unassigned].push(clause);
                     self.watched_by[clause] = (next_unassigned, other);
@@ -128,14 +122,16 @@ impl Propagator<'_> {
                     // be a new unit
                     if let e @ Err(_) = assignment.try_assign(other) {
                         // the unit lead to a conflict
-                        result = e;
                         assignment.rollback(rollback);
-                        break;
+                        self.watchlist[lit] = relevant_clauses;
+                        return e;
                     }
                 }
             }
 
             self.watchlist[lit] = relevant_clauses;
         }
+
+        Ok(())
     }
 }

@@ -28,13 +28,11 @@ impl Assignment {
     pub fn find_next_true_or_unassigned(
         &self,
         literals: &[Literal],
-        except1: Literal,
-        except2: Literal,
+        except: Literal,
     ) -> Option<Literal> {
         literals
             .iter()
-            .filter(|&&lit| lit != except1 && lit != except2 && !self.inner.contains(-lit))
-            .next()
+            .find(|&&lit| !self.inner.contains(-lit) && lit != except)
             .copied()
     }
 
