@@ -5,26 +5,29 @@ mod parser;
 
 use anyhow::Result;
 use clap::Parser;
+use common::storage::{ClauseStorage, View};
 use itertools::Itertools;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use crate::{
-    common::{storage, Lemma, RawLemma},
-    forward::validate,
-};
+use crate::common::{storage, Lemma, RawLemma};
 
 #[derive(Parser, Debug)]
-pub struct Features {
+pub struct Flags {
     #[arg(short, long)]
-    /// Only do RUP checking, skip any RAT check and assume invalid for those
-    /// lemmas.
+    /// Only check lemmas for the RUP property instead of RAT if the RUP check fails.
     rup_only: bool,
     #[arg(short, long)]
+    /// Show the progress bar during verification to indicate how many proof steps have been
+    /// processed.
     progress: bool,
-    #[arg(short, long)]
-    forward: bool,
     #[arg(long)]
+    /// Skip all deletion steps in a proof.
     skip_deletions: bool,
+    #[arg(short, long)]
+    /// Specify whether a mutable or immutable clause storage should be used.
+    /// A mutable storage has higher performance in single threaded environments while an immutable
+    /// storage can potentially be faster with multi threaded algorithms.
+    mutating: bool,
     cnf: String,
     proof: String,
 }
@@ -34,7 +37,7 @@ fn main() -> Result<()> {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
-    let flags = Features::parse();
+    let flags = Flags::parse();
 
     let (_, formula) = parser::cnf::parse(&std::fs::read_to_string(&flags.cnf)?)?;
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&flags.proof)?)?;
@@ -56,8 +59,22 @@ fn main() -> Result<()> {
     // mark the formula clauses as active
     let db_view = clause_db.partial_view(formula_clauses);
 
-    validate(&clause_db, db_view, proof)?;
-    println!("valid");
+    if flags.mutating {
+        forward::MutatingChecker::with_flags(flags).validate(clause_db, db_view, proof)?;
+    } else {
+        forward::Checker::with_flags(flags).validate(clause_db, db_view, proof)?;
+    }
 
+    println!("s VERIFIED");
     Ok(())
+}
+
+trait Validator {
+    fn with_flags(flags: Flags) -> Self;
+    fn validate(
+        self,
+        clause_db: ClauseStorage,
+        db_view: View,
+        proof: Vec<Lemma>,
+    ) -> anyhow::Result<()>;
 }

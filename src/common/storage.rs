@@ -5,7 +5,7 @@ use std::{
 
 use fxhash::FxHashMap;
 
-use super::Literal;
+use super::{Assignment, Literal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiteralArray<T> {
@@ -91,12 +91,11 @@ impl<T> IndexMut<Clause> for ClauseArray<T> {
 /// Keeps track of the clauses which are currently active and has a reference to the underlying
 /// database.
 /// Generate a view from the database and then access the clauses through it.
-pub struct View<'a> {
+pub struct View {
     active: ClauseArray<bool>,
-    db: &'a ClauseStorage,
 }
 
-impl View<'_> {
+impl View {
     pub fn del(&mut self, clause: Clause) {
         self.active[clause] = false;
     }
@@ -107,21 +106,6 @@ impl View<'_> {
 
     pub fn is_active(&self, clause: Clause) -> bool {
         self.active[clause]
-    }
-
-    pub fn clauses(&self) -> impl Iterator<Item = Clause> + '_ {
-        (0..self.db.number_of_clauses()).filter_map(|i| {
-            let clause = Clause { index: i };
-            if self.active[clause] {
-                Some(clause)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn clause(&self, clause: Clause) -> &[Literal] {
-        self.db.clause(clause)
     }
 }
 
@@ -168,6 +152,17 @@ impl ClauseStorage {
         unsafe { self.literals.get_unchecked(range.start..range.end) }
     }
 
+    pub fn clauses<'a>(&'a self, view: &'a View) -> impl Iterator<Item = Clause> + 'a {
+        (0..self.number_of_clauses()).filter_map(|i| {
+            let clause = Clause { index: i };
+            if view.is_active(clause) {
+                Some(clause)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn extract_true_unit(&self, clause: Clause) -> Option<Literal> {
         let range = &self.ranges[clause.index];
         if range.end - range.start == 1 {
@@ -187,7 +182,48 @@ impl ClauseStorage {
         for i in 0..n {
             active[Clause { index: i }] = true;
         }
-        View { db: &self, active }
+        View { active }
+    }
+
+    // This function goes through the literals of the given clause, returning the first literal
+    // which has not been falsified. The first two literals are always skipped as these are already
+    // watched.
+    // If a non-falsified literal is found the provided literal is replaced. This literal must be
+    // one of the first two. If it is not this will cause undefined behavior in the checker.
+    pub fn next_non_falsified_and_swap(
+        &mut self,
+        clause: Clause,
+        assignment: &Assignment,
+        replace: Literal,
+    ) -> Option<Literal> {
+        let range = &self.ranges[clause.index];
+        let mut index = 2;
+        for &lit in &self.literals[(range.start + 2)..range.end] {
+            if !assignment.is_true(-lit) {
+                if self.literals[range.start] == replace {
+                    self.literals.swap(range.start, range.start + index);
+                } else {
+                    self.literals.swap(range.start + 1, range.start + index);
+                }
+                return Some(lit);
+            }
+            index += 1;
+        }
+        None
+    }
+
+    #[inline(never)]
+    /// Gets the first two literals of a clause. These are usually the ones being watched by the
+    /// propagator. If the clause has less than 2 literals this will return literals from the next
+    /// clause which causes undefined behavior in the checker.
+    pub fn first_two_literals(&self, clause: Clause) -> (Literal, Literal) {
+        unsafe {
+            let start = self.ranges.get_unchecked(clause.index).start;
+            (
+                *self.literals.get_unchecked(start),
+                *self.literals.get_unchecked(start + 1),
+            )
+        }
     }
 }
 

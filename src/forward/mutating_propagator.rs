@@ -1,51 +1,33 @@
 use crate::common::{
-    storage::{Clause, ClauseArray, ClauseStorage, LiteralArray, View},
-    Assignment, Conflict, Literal,
+    storage::{Clause, ClauseStorage, LiteralArray, View},
+    Assignment, Conflict,
 };
 
-pub struct Propagator<'a> {
-    /// Mapping from literal to a set of clauses. These are the clauses watched by the specified
-    /// literal.
+pub struct MutatingPropagator {
     watchlist: LiteralArray<Vec<Clause>>,
-    /// Vec that contains the actual literal instance of the clause being watched.
-    watched_by: ClauseArray<(Literal, Literal)>,
-    /// Reference to the underlying clause database to get information about the clauses.
-    clause_db: &'a ClauseStorage,
 }
 
-impl<'a> Propagator<'a> {
-    /// Create a new propagator from the clauses in a database.
-    pub fn new(clause_db: &'a ClauseStorage, view: &View) -> Self {
-        // This goes through all the clauses in the database. If the clause has at least two
-        // literals, the first two are registered in the watchlist. Otherwise, None is stored
-        // instead, indicating that this is either a unit or empty clause.
-        let mut propagator = Propagator {
+impl MutatingPropagator {
+    pub fn new(clause_db: &ClauseStorage, view: &View) -> Self {
+        let mut propagator = MutatingPropagator {
             watchlist: clause_db.literal_array(),
-            watched_by: clause_db.clause_array(),
-            clause_db,
         };
 
         clause_db
             .clauses(view)
-            .for_each(|c| propagator.add_clause(c));
+            .for_each(|c| propagator.add_clause(c, clause_db));
 
         propagator
     }
-}
 
-impl Propagator<'_> {
-    pub fn add_clause(&mut self, clause: Clause) {
-        let lits = self.clause_db.clause(clause);
+    pub fn add_clause(&mut self, clause: Clause, clause_db: &ClauseStorage) {
+        let lits = clause_db.clause(clause);
         if lits.len() >= 2 {
             self.watchlist[lits[0]].push(clause);
             self.watchlist[lits[1]].push(clause);
-            self.watched_by[clause] = (lits[0], lits[1]);
         }
     }
 
-    /// Scan the currently active clauses for true units (clauses only containing a single
-    /// literal). Update the assignment accordingly. If a conflict is encountered an error is
-    /// returned with the literal that caused the conflict.
     pub fn propagate_true_units(
         &self,
         clause_db: &ClauseStorage,
@@ -57,7 +39,7 @@ impl Propagator<'_> {
         for c in clause_db.clauses(db_view) {
             // check if there exists is no second literal
             // this is thus a true unit
-            if let Some(unit) = self.clause_db.extract_true_unit(c) {
+            if let Some(unit) = clause_db.extract_true_unit(c) {
                 if let e @ Err(_) = assignment.try_assign(unit) {
                     assignment.rollback(rollback);
                     return e;
@@ -67,11 +49,9 @@ impl Propagator<'_> {
         Ok(())
     }
 
-    /// Propagates the provided assignment, if this results in a conflict, returns an error
-    /// indicating what caused the conflict and rolls back the assignment to its prior state.
     pub fn propagate(
         &mut self,
-        clause_db: &ClauseStorage,
+        clause_db: &mut ClauseStorage,
         db_view: &View,
         assignment: &mut Assignment,
     ) -> Result<(), Conflict> {
@@ -99,12 +79,14 @@ impl Propagator<'_> {
 
                 if !db_view.is_active(clause) {
                     // lazily remove this clause
+                    // Important: this causes undefined behavior if a clause is removed and later
+                    // readded as it can then perhaps appear in multiple watchlists?
                     i -= 1;
                     relevant_clauses.swap_remove(i);
                     continue;
                 }
 
-                let (fst, snd) = self.watched_by[clause];
+                let (fst, snd) = clause_db.first_two_literals(clause);
 
                 let other = if fst == lit { snd } else { fst };
 
@@ -115,10 +97,9 @@ impl Propagator<'_> {
                 // one of the two literals must be falsified
                 // find out which one and replace it
                 if let Some(next_unassigned) =
-                    assignment.find_next_true_or_unassigned(clause_db.clause(clause), other)
+                    clause_db.next_non_falsified_and_swap(clause, assignment, lit)
                 {
                     self.watchlist[next_unassigned].push(clause);
-                    self.watched_by[clause] = (next_unassigned, other);
                     i -= 1;
                     relevant_clauses.swap_remove(i);
                 } else {
