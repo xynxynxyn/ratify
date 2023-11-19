@@ -212,7 +212,6 @@ impl ClauseStorage {
         None
     }
 
-    #[inline(never)]
     /// Gets the first two literals of a clause. These are usually the ones being watched by the
     /// propagator. If the clause has less than 2 literals this will return literals from the next
     /// clause which causes undefined behavior in the checker.
