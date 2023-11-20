@@ -5,9 +5,4 @@ echo "drat-trim"
 time drat-trim $1 ___proof.drat -u -f
 echo -e "\nratify"
 cargo build --release
-if [ -z $2 ]
-then
-        time ./target/release/ratify $1 ___proof.drat -p -r
-else
-        time ./target/release/ratify $1 ___proof.drat $2
-fi
+time ./target/release/ratify $1 ___proof.drat -m -p

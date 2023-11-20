@@ -1,3 +1,7 @@
+use std::fmt::Display;
+
+use itertools::Itertools;
+
 use super::{
     storage::{ClauseStorage, LiteralSet},
     Conflict, Literal,
@@ -78,5 +82,19 @@ impl Assignment {
 
     pub fn nth_lit(&self, n: usize) -> Literal {
         self.trace[n]
+    }
+}
+
+impl Display for Assignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]",
+            self.trace
+                .iter()
+                .sorted()
+                .map(|lit| lit.to_string())
+                .join(",")
+        )
     }
 }

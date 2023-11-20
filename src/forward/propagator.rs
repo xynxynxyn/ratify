@@ -72,7 +72,6 @@ impl Propagator<'_> {
     pub fn propagate(
         &mut self,
         clause_db: &ClauseStorage,
-        db_view: &View,
         assignment: &mut Assignment,
     ) -> Result<(), Conflict> {
         let rollback = assignment.rollback_point();
@@ -96,13 +95,6 @@ impl Propagator<'_> {
             while i < relevant_clauses.len() {
                 let clause = relevant_clauses[i];
                 i += 1;
-
-                if !db_view.is_active(clause) {
-                    // lazily remove this clause
-                    i -= 1;
-                    relevant_clauses.swap_remove(i);
-                    continue;
-                }
 
                 let (fst, snd) = self.watched_by[clause];
 
@@ -137,5 +129,11 @@ impl Propagator<'_> {
         }
 
         Ok(())
+    }
+
+    pub fn delete_clause(&mut self, clause: Clause) {
+        let (fst, snd) = self.watched_by[clause];
+        self.watchlist[fst].retain(|&c| c != clause);
+        self.watchlist[snd].retain(|&c| c != clause);
     }
 }

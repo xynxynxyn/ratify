@@ -6,6 +6,7 @@ mod parser;
 use anyhow::Result;
 use clap::Parser;
 use common::storage::{ClauseStorage, View};
+use fxhash::FxHashSet;
 use itertools::Itertools;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -22,7 +23,7 @@ pub struct Flags {
     progress: bool,
     #[arg(long)]
     /// Skip all deletion steps in a proof.
-    skip_deletions: bool,
+    ignore_deletions: bool,
     #[arg(short, long)]
     /// Specify whether a mutable or immutable clause storage should be used.
     /// A mutable storage has higher performance in single threaded environments while an immutable
@@ -43,15 +44,44 @@ fn main() -> Result<()> {
     let lemmas = parser::drat::parse(&std::fs::read_to_string(&flags.proof)?)?;
 
     let mut db_builder = storage::Builder::new();
+    let mut seen = FxHashSet::default();
     let formula_clauses = formula.len();
     for c in formula {
-        let _ = db_builder.add_clause(c);
+        let clause = db_builder.add_clause(c);
+        seen.insert(clause);
     }
+
+    // convert the lemmas to clause ids
+    // we also remove add lemmas if they add the same clause but it has not been deleted in between
+    // the two additions
+    // if we ignore deletions we also remove those duplicate additions
     let proof = lemmas
         .into_iter()
-        .map(|l| match l {
-            RawLemma::Add(c) => Lemma::Add(db_builder.add_clause(c)),
-            RawLemma::Del(c) => Lemma::Del(db_builder.get_clause(c)),
+        .filter_map(|l| match l {
+            RawLemma::Add(c) => {
+                let clause = db_builder.add_clause(c);
+                if !seen.insert(clause) {
+                    tracing::warn!("lemma {} is added more than once", clause);
+                    // we want to ignore duplicate additions
+                    return None;
+                }
+                Some(Lemma::Add(clause))
+            }
+            RawLemma::Del(c) => {
+                if flags.ignore_deletions {
+                    None
+                } else {
+                    let clause = db_builder.add_clause(c);
+                    if !seen.remove(&clause) {
+                        tracing::warn!("lemma {} was not added before it was deleted", clause);
+                        // if a lemma is to be deleted even though it does not exist we ignore that
+                        // deletion step
+                        None
+                    } else {
+                        Some(Lemma::Del(clause))
+                    }
+                }
+            }
         })
         .collect_vec();
     let clause_db = db_builder.finish();

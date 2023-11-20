@@ -1,9 +1,11 @@
 use std::{
     collections::BTreeSet,
+    fmt::Display,
     ops::{Index, IndexMut, Range},
 };
 
 use fxhash::FxHashMap;
+use itertools::Itertools;
 
 use super::{Assignment, Literal};
 
@@ -69,6 +71,12 @@ impl LiteralSet {
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct Clause {
     index: usize,
+}
+
+impl Display for Clause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "c{}", self.index)
+    }
 }
 
 pub struct ClauseArray<T> {
@@ -188,23 +196,18 @@ impl ClauseStorage {
     // This function goes through the literals of the given clause, returning the first literal
     // which has not been falsified. The first two literals are always skipped as these are already
     // watched.
-    // If a non-falsified literal is found the provided literal is replaced. This literal must be
-    // one of the first two. If it is not this will cause undefined behavior in the checker.
     pub fn next_non_falsified_and_swap(
         &mut self,
         clause: Clause,
         assignment: &Assignment,
-        replace: Literal,
+        swap_with: usize,
     ) -> Option<Literal> {
         let range = &self.ranges[clause.index];
         let mut index = 2;
         for &lit in &self.literals[(range.start + 2)..range.end] {
             if !assignment.is_true(-lit) {
-                if self.literals[range.start] == replace {
-                    self.literals.swap(range.start, range.start + index);
-                } else {
-                    self.literals.swap(range.start + 1, range.start + index);
-                }
+                self.literals
+                    .swap(range.start + swap_with, range.start + index);
                 return Some(lit);
             }
             index += 1;
@@ -215,14 +218,30 @@ impl ClauseStorage {
     /// Gets the first two literals of a clause. These are usually the ones being watched by the
     /// propagator. If the clause has less than 2 literals this will return literals from the next
     /// clause which causes undefined behavior in the checker.
-    pub fn first_two_literals(&self, clause: Clause) -> (Literal, Literal) {
+    /// TODO maybe make this more optimal by not returning an option, but that would require a
+    /// little bit of preprocessing by removing deletions of true units
+    pub fn first_two_literals(&self, clause: Clause) -> Option<(Literal, Literal)> {
         unsafe {
-            let start = self.ranges.get_unchecked(clause.index).start;
-            (
-                *self.literals.get_unchecked(start),
-                *self.literals.get_unchecked(start + 1),
-            )
+            let range = &self.ranges.get_unchecked(clause.index);
+            if range.is_empty() {
+                None
+            } else {
+                Some((
+                    *self.literals.get_unchecked(range.start),
+                    *self.literals.get_unchecked(range.start + 1),
+                ))
+            }
         }
+    }
+
+    pub fn print_clause(&self, clause: Clause) -> String {
+        format!(
+            "[{}]",
+            self.clause(clause)
+                .iter()
+                .map(|lit| lit.to_string())
+                .join(",")
+        )
     }
 }
 
@@ -251,10 +270,6 @@ impl Builder {
             self.clauses.insert(clause, c_ref);
             c_ref
         }
-    }
-
-    pub fn get_clause(&self, clause: BTreeSet<Literal>) -> Clause {
-        *self.clauses.get(&clause).expect("clause not known")
     }
 
     pub fn finish(mut self) -> ClauseStorage {

@@ -52,11 +52,8 @@ impl MutatingPropagator {
     pub fn propagate(
         &mut self,
         clause_db: &mut ClauseStorage,
-        db_view: &View,
         assignment: &mut Assignment,
     ) -> Result<(), Conflict> {
-        let rollback = assignment.rollback_point();
-
         let mut processed = 0;
 
         while processed < assignment.trace_len() {
@@ -65,39 +62,23 @@ impl MutatingPropagator {
             let lit = -assignment.nth_lit(processed);
             processed += 1;
 
-            // TODO try out std::vec::Vec::extract_if
-            // maybe use std::mem::swap twice with a preallocated vec?
-            // have to check whether this actually improves anything
-            let mut relevant_clauses =
-                std::mem::replace(&mut self.watchlist[lit], Vec::with_capacity(0));
-
+            let mut relevant_clauses = std::mem::replace(&mut self.watchlist[lit], vec![]);
             let mut i = 0;
 
             while i < relevant_clauses.len() {
                 let clause = relevant_clauses[i];
                 i += 1;
 
-                if !db_view.is_active(clause) {
-                    // lazily remove this clause
-                    // Important: this causes undefined behavior if a clause is removed and later
-                    // readded as it can then perhaps appear in multiple watchlists?
-                    i -= 1;
-                    relevant_clauses.swap_remove(i);
-                    continue;
-                }
+                let (fst, snd) = clause_db.first_two_literals(clause).unwrap();
 
-                let (fst, snd) = clause_db.first_two_literals(clause);
-
-                let other = if fst == lit { snd } else { fst };
+                let (other, swap_with) = if fst == lit { (snd, 0) } else { (fst, 1) };
 
                 if assignment.is_true(other) {
                     continue;
                 }
 
-                // one of the two literals must be falsified
-                // find out which one and replace it
                 if let Some(next_unassigned) =
-                    clause_db.next_non_falsified_and_swap(clause, assignment, lit)
+                    clause_db.next_non_falsified_and_swap(clause, assignment, swap_with)
                 {
                     self.watchlist[next_unassigned].push(clause);
                     i -= 1;
@@ -107,7 +88,6 @@ impl MutatingPropagator {
                     // be a new unit
                     if let e @ Err(_) = assignment.try_assign(other) {
                         // the unit lead to a conflict
-                        assignment.rollback(rollback);
                         self.watchlist[lit] = relevant_clauses;
                         return e;
                     }
@@ -118,5 +98,23 @@ impl MutatingPropagator {
         }
 
         Ok(())
+    }
+
+    pub fn delete_clause(&mut self, clause_db: &ClauseStorage, clause: Clause) {
+        let (fst, snd) = clause_db.first_two_literals(clause).unwrap();
+        if !self.watchlist[fst].contains(&clause) {
+            panic!("panic {} not in watchlist: {}", fst, clause);
+        }
+        if !self.watchlist[snd].contains(&clause) {
+            panic!("panic {} not in watchlist: {}", snd, clause);
+        }
+        self.watchlist[fst].retain(|&c| c != clause);
+        self.watchlist[snd].retain(|&c| c != clause);
+        if self.watchlist[fst].contains(&clause) {
+            panic!("panic {} still in watchlist", fst);
+        }
+        if self.watchlist[snd].contains(&clause) {
+            panic!("panic {} still in watchlist", snd);
+        }
     }
 }
