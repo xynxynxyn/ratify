@@ -3,7 +3,7 @@ use std::fmt::Display;
 use itertools::Itertools;
 
 use super::{
-    storage::{ClauseStorage, LiteralSet},
+    storage::{Clause, ClauseStorage, LiteralSet},
     Conflict, Literal,
 };
 
@@ -42,16 +42,16 @@ impl Assignment {
 
     /// Try adding the literal to the assignment. If it is already assigned nothing happens. If it
     /// is falsified an error with a conflict is returned.
-    pub fn try_assign(&mut self, literal: Literal) -> Result<(), Conflict> {
+    pub fn try_assign(&mut self, literal: Literal) -> Result<bool, Conflict> {
         // check if the negation is assigned
         if self.inner.contains(-literal) {
             Err(Conflict {})
-        } else if self.inner.contains(literal) {
-            Ok(())
-        } else {
-            self.inner.insert(literal);
+        } else if self.inner.insert(literal) {
+            // the literal has not been assigned already, add it to the trace
             self.trace.push(literal);
-            Ok(())
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -66,14 +66,18 @@ impl Assignment {
     }
 
     pub fn rollback(&mut self, rollback_point: Rollback) {
-        let cut = self.trace.split_off(rollback_point.len);
-        for lit in cut {
+        for &lit in &self.trace[rollback_point.len..] {
             self.inner.remove(lit);
         }
+
+        self.trace.truncate(rollback_point.len)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.trace.is_empty()
+    pub fn is_satisfied(&self, clause: Clause, clause_db: &ClauseStorage) -> bool {
+        clause_db
+            .clause(clause)
+            .into_iter()
+            .any(|&lit| self.is_true(lit))
     }
 
     pub fn trace_len(&self) -> usize {
